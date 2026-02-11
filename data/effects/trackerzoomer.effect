@@ -1,0 +1,60 @@
+// TrackerZoomer effect: sample a sub-rectangle of the input texture
+// mul_val: size of sampled region in UV space
+// add_val: top-left offset of sampled region in UV space
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 mul_val;
+uniform float2 add_val;
+uniform float multiplier;
+
+sampler_state linearSampler {
+	Filter    = Linear;
+	AddressU  = Clamp;
+	AddressV  = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData v_out;
+	v_out.pos = mul(v_in.pos, ViewProj);
+	v_out.uv = v_in.uv;
+	return v_out;
+}
+
+float4 PSDefault(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv * mul_val + add_val;
+	float4 col = image.Sample(linearSampler, uv);
+	return col;
+}
+
+float4 PSDrawMultiply(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv * mul_val + add_val;
+	float4 col = image.Sample(linearSampler, uv);
+	return col * multiplier;
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSDefault(v_in);
+	}
+}
+
+technique DrawMultiply
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSDrawMultiply(v_in);
+	}
+}
