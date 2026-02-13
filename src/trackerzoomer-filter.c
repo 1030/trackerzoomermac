@@ -2,7 +2,10 @@
 #include <graphics/graphics.h>
 #include <util/platform.h>
 #include <util/threading.h>
+
+#if defined(HAVE_OBS_FRONTEND_API)
 #include <obs/obs-frontend-api.h>
+#endif
 
 #include <stdio.h>
 #include <math.h>
@@ -996,9 +999,15 @@ static void apply_transform_task(void *param)
 	if (!parent)
 		goto cleanup;
 
+#if defined(HAVE_OBS_FRONTEND_API)
 	scene_source = obs_frontend_get_current_scene();
 	if (!scene_source)
 		goto cleanup;
+#else
+	// Frontend API not available (headless build / CI configuration).
+	// We can’t locate the current scene item, so just skip applying transforms.
+	goto cleanup;
+#endif
 
 	scene = obs_scene_from_source(scene_source);
 	if (!scene)
