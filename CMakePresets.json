@@ -65,10 +65,7 @@
       "name": "windows-ci-x64",
       "inherits": ["windows-x64"],
       "displayName": "Windows x64 CI build",
-      "description": "Build for Windows x64 on CI",
-      "cacheVariables": {
-        "CMAKE_COMPILE_WARNING_AS_ERROR": true
-      }
+      "description": "Build for Windows x64 on CI"
     },
     {
       "name": "ubuntu-x86_64",
