@@ -35,6 +35,7 @@ add_library(apriltag STATIC
     "${APRILTAG_DIR}/common/image_u8x4.c"
     "${APRILTAG_DIR}/common/matd.c"
     "${APRILTAG_DIR}/common/pthreads_cross.c"
+    "${APRILTAG_DIR}/common/pnm.c"
     "${APRILTAG_DIR}/common/svd22.c"
     "${APRILTAG_DIR}/common/time_util.c"
     "${APRILTAG_DIR}/common/unionfind.c"
