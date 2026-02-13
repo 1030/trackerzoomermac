@@ -48,9 +48,17 @@ add_library(apriltag STATIC
 )
 
 target_include_directories(apriltag PUBLIC "${APRILTAG_DIR}" "${APRILTAG_DIR}/common")
+
+# Needed for linking apriltag (static) into our plugin module on ELF platforms.
+# (Fixes: relocation ... can not be used when making a shared object; recompile with -fPIC)
+set_target_properties(apriltag PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 target_compile_definitions(apriltag PRIVATE _CRT_SECURE_NO_WARNINGS)
 if(MSVC)
-  target_compile_definitions(apriltag PRIVATE _USE_MATH_DEFINES)
+  # Our CI enables warnings-as-errors globally; apriltag upstream produces a number
+  # of harmless conversion/macro warnings under MSVC. Disable "treat warnings as errors"
+  # and silence the noisy ones for this vendored library.
+  target_compile_options(apriltag PRIVATE /WX- /wd4005 /wd4068 /wd4244 /wd4267)
 else()
   # Our project uses very strict warnings-as-errors; apriltag upstream is clean
   # but can trip on warnings treated as errors under Clang.
