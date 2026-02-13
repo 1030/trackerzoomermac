@@ -15,11 +15,11 @@
 
 struct gray_frame {
 	uint8_t *data;
-	int width;   // detection buffer width
-	int height;  // detection buffer height
+	int width;  // detection buffer width
+	int height; // detection buffer height
 	int stride;
-	int src_w;   // original source frame width
-	int src_h;   // original source frame height
+	int src_w; // original source frame width
+	int src_h; // original source frame height
 	uint64_t frame_seq;
 };
 
@@ -48,7 +48,7 @@ struct trackerzoomer_filter {
 	bool deglitch;
 	int min_cluster_pixels;
 	int max_nmaxima;
-	float critical_rad;       // radians
+	float critical_rad; // radians
 	float max_line_fit_mse;
 	int min_white_black_diff;
 
@@ -59,11 +59,11 @@ struct trackerzoomer_filter {
 	bool freeze_transform;
 	bool apply_translation;
 	bool apply_scale;
-	float meas_alpha;            // 0..1 measurement smoothing for ROI
-	float ease_tau;              // seconds, transform easing time constant
+	float meas_alpha; // 0..1 measurement smoothing for ROI
+	float ease_tau;   // seconds, transform easing time constant
 	bool jump_guard;
-	float max_pos_jump_px;       // max change in *target* pos per apply step
-	float max_scale_jump;        // max change in *target* scale per apply step
+	float max_pos_jump_px; // max change in *target* pos per apply step
+	float max_scale_jump;  // max change in *target* scale per apply step
 
 	// canvas clamp (prevents black borders when tracking near frame edges)
 	bool clamp_to_canvas;
@@ -262,7 +262,8 @@ static void draw_solid_rect(gs_effect_t *solid, float x, float y, float w, float
 	gs_matrix_pop();
 }
 
-static void downscale_luma_nearest(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w, int src_h, int src_stride)
+static void downscale_luma_nearest(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w,
+				   int src_h, int src_stride)
 {
 	if (!dst || !src || dst_w <= 0 || dst_h <= 0 || src_w <= 0 || src_h <= 0)
 		return;
@@ -288,7 +289,8 @@ static inline uint8_t rgb_to_luma_u8(int r, int g, int b)
 	return (uint8_t)y8;
 }
 
-static void bgra_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w, int src_h, int src_stride)
+static void bgra_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w,
+				   int src_h, int src_stride)
 {
 	if (!dst || !src)
 		return;
@@ -308,7 +310,8 @@ static void bgra_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_s
 	}
 }
 
-static void rgba_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w, int src_h, int src_stride)
+static void rgba_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w,
+				   int src_h, int src_stride)
 {
 	if (!dst || !src)
 		return;
@@ -328,7 +331,8 @@ static void rgba_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_s
 	}
 }
 
-static void bgrx_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w, int src_h, int src_stride)
+static void bgrx_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w,
+				   int src_h, int src_stride)
 {
 	if (!dst || !src)
 		return;
@@ -361,8 +365,8 @@ static void dump_pgm_u8(const char *path, const uint8_t *buf, int w, int h, int 
 	fclose(fp);
 }
 
-static void uyvy_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w, int src_h,
-				  int src_stride)
+static void uyvy_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w,
+				   int src_h, int src_stride)
 {
 	// UYVY: U0 Y0 V0 Y1 (2 pixels per 4 bytes)
 	if (!dst || !src)
@@ -380,8 +384,8 @@ static void uyvy_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_s
 	}
 }
 
-static void yuy2_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w, int src_h,
-				  int src_stride)
+static void yuy2_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w,
+				   int src_h, int src_stride)
 {
 	// YUY2: Y0 U0 Y1 V0
 	if (!dst || !src)
@@ -399,8 +403,8 @@ static void yuy2_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_s
 	}
 }
 
-static void yvyu_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w, int src_h,
-				  int src_stride)
+static void yvyu_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w,
+				   int src_h, int src_stride)
 {
 	// YVYU: Y0 V0 Y1 U0
 	if (!dst || !src)
@@ -418,7 +422,8 @@ static void yvyu_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_s
 	}
 }
 
-static void compute_roi_from_detection(const apriltag_detection_t *d, float *out_minx, float *out_miny, float *out_maxx, float *out_maxy)
+static void compute_roi_from_detection(const apriltag_detection_t *d, float *out_minx, float *out_miny, float *out_maxx,
+				       float *out_maxy)
 {
 	float minx = d->p[0][0];
 	float maxx = d->p[0][0];
@@ -443,7 +448,8 @@ static void compute_roi_from_detection(const apriltag_detection_t *d, float *out
 }
 
 // Python parity: pick the corner of a tag that points towards the other tag.
-static void inner_corner_towards(const apriltag_detection_t *d, float other_cx, float other_cy, float *out_x, float *out_y)
+static void inner_corner_towards(const apriltag_detection_t *d, float other_cx, float other_cy, float *out_x,
+				 float *out_y)
 {
 	const float cx = d->c[0];
 	const float cy = d->c[1];
@@ -473,8 +479,8 @@ static void inner_corner_towards(const apriltag_detection_t *d, float other_cx, 
 	*out_y = d->p[best_i][1];
 }
 
-static void update_auto_roi(struct trackerzoomer_filter *f, float minx, float miny, float maxx, float maxy, int det_w, int det_h,
-			    int src_w, int src_h, bool inset_padding)
+static void update_auto_roi(struct trackerzoomer_filter *f, float minx, float miny, float maxx, float maxy, int det_w,
+			    int det_h, int src_w, int src_h, bool inset_padding)
 {
 	// Python parity (TrackerZoomOBS):
 	// - Convert detection bbox into source space
@@ -692,7 +698,8 @@ static void *worker_main(void *param)
 			}
 			// Close-tags => wide/full-frame (zoom off) gesture.
 			// Threshold: one tag width (we approximate with avg edge length).
-			const bool too_close = (avg_edge > 0.0f) && isfinite(min_corner_dist) && (min_corner_dist < avg_edge);
+			const bool too_close = (avg_edge > 0.0f) && isfinite(min_corner_dist) &&
+					       (min_corner_dist < avg_edge);
 
 			// Auto-inset to remove the white border around printed tags.
 			// Spec: avg edge length (px) / 6, plus user padding.
@@ -708,7 +715,8 @@ static void *worker_main(void *param)
 				f->auto_roi_valid = false;
 				f->_transform_dirty = true;
 			} else {
-				update_auto_roi(f, minx, miny, maxx, maxy, f->work.width, f->work.height, f->work.src_w, f->work.src_h, true);
+				update_auto_roi(f, minx, miny, maxx, maxy, f->work.width, f->work.height, f->work.src_w,
+						f->work.src_h, true);
 			}
 			pthread_mutex_unlock(&f->frame_mutex);
 
@@ -833,7 +841,7 @@ static obs_properties_t *trackerzoomer_filter_properties(void *data)
 
 	// Detection scaling mode (diagnostic)
 	obs_property_t *p_mode = obs_properties_add_list(props, "downscale_mode", "Detection scaling mode",
-							OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+							 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	obs_property_list_add_int(p_mode, "External downscale (detect_width)", 0);
 	obs_property_list_add_int(p_mode, "Apriltag quad_decimate (feed full-res)", 1);
 	obs_properties_add_int_slider(props, "detect_width", "External detect width (px)", 160, 3840, 16);
@@ -1081,7 +1089,6 @@ static void feed_pending_from_frame(struct trackerzoomer_filter *f, struct obs_s
 	if (src_w <= 0 || src_h <= 0)
 		return;
 
-
 	int dst_w = src_w;
 	int dst_h = src_h;
 	if (f->downscale_mode == 0) {
@@ -1101,8 +1108,9 @@ static void feed_pending_from_frame(struct trackerzoomer_filter *f, struct obs_s
 	f->pending.src_w = src_w;
 	f->pending.src_h = src_h;
 
-	if (frame->format == VIDEO_FORMAT_I420 || frame->format == VIDEO_FORMAT_NV12 || frame->format == VIDEO_FORMAT_Y800 ||
-	    frame->format == VIDEO_FORMAT_I444 || frame->format == VIDEO_FORMAT_I422) {
+	if (frame->format == VIDEO_FORMAT_I420 || frame->format == VIDEO_FORMAT_NV12 ||
+	    frame->format == VIDEO_FORMAT_Y800 || frame->format == VIDEO_FORMAT_I444 ||
+	    frame->format == VIDEO_FORMAT_I422) {
 		// For planar formats (and grayscale), the first plane is luma or intensity.
 		const uint8_t *yplane = frame->data[0];
 		const int ystride = (int)frame->linesize[0];
@@ -1153,9 +1161,10 @@ static void feed_pending_from_frame(struct trackerzoomer_filter *f, struct obs_s
 	// the tag is actually visible after format conversion.
 	const uint64_t dump_now = os_gettime_ns();
 	if ((!f->_last_dump_ns || (dump_now - f->_last_dump_ns) > 2000000000ULL) && f->_dump_count < 3) {
-		dump_pgm_u8("/Users/hal9000/clawd/trackerzoomer-debug.pgm", f->pending.data, f->pending.width, f->pending.height,
-		     f->pending.stride);
-		blog(LOG_INFO, "[trackerzoomer-filter] wrote debug frame: /Users/hal9000/clawd/trackerzoomer-debug.pgm (%dx%d)",
+		dump_pgm_u8("/Users/hal9000/clawd/trackerzoomer-debug.pgm", f->pending.data, f->pending.width,
+			    f->pending.height, f->pending.stride);
+		blog(LOG_INFO,
+		     "[trackerzoomer-filter] wrote debug frame: /Users/hal9000/clawd/trackerzoomer-debug.pgm (%dx%d)",
 		     f->pending.width, f->pending.height);
 		f->_last_dump_ns = dump_now;
 		f->_dump_count++;
@@ -1379,7 +1388,7 @@ static void trackerzoomer_filter_tick(void *data, float seconds)
 	}
 
 	// Deadband on target updates (python parity). Prevents micro jitter.
-	const float min_pos_delta = 2.0f;   // pixels
+	const float min_pos_delta = 2.0f;     // pixels
 	const float min_scale_delta = 0.002f; // absolute scale
 	const float dx_t = cand_pos_x - f->target_pos_x;
 	const float dy_t = cand_pos_y - f->target_pos_y;
@@ -1427,13 +1436,14 @@ static void trackerzoomer_filter_tick(void *data, float seconds)
 	const float want_s = f->cur_scale;
 
 	// Python parity: suppress tiny updates to avoid micro-jitter.
-	const float pos_thresh = 1.0f;       // pixels
+	const float pos_thresh = 1.0f;        // pixels
 	const float scale_rel_thresh = 0.01f; // 1%
 	const float dx = fabsf(want_x - f->_last_applied_pos_x);
 	const float dy = fabsf(want_y - f->_last_applied_pos_y);
 	const float s_last = f->_last_applied_scale;
 	const float ds_rel = fabsf(want_s - s_last) / (fabsf(s_last) > 1e-6f ? fabsf(s_last) : 1e-6f);
-	const bool changed = f->_transform_dirty || (dx >= pos_thresh) || (dy >= pos_thresh) || (ds_rel >= scale_rel_thresh);
+	const bool changed = f->_transform_dirty || (dx >= pos_thresh) || (dy >= pos_thresh) ||
+			     (ds_rel >= scale_rel_thresh);
 
 	// Always advance apply time for stable dt/alpha, even if we skip UI update.
 	f->_last_apply_ns = now_ns;
@@ -1493,10 +1503,11 @@ static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
 		ph = (int)obs_source_get_base_height(parent);
 	}
 	const uint64_t rnow = os_gettime_ns();
-	const bool size_changed = (pw != 0 && ph != 0) && (pw != f->_last_render_parent_w || ph != f->_last_render_parent_h);
+	const bool size_changed = (pw != 0 && ph != 0) &&
+				  (pw != f->_last_render_parent_w || ph != f->_last_render_parent_h);
 	if (size_changed) {
-		blog(LOG_WARNING, "[trackerzoomer-filter] render parent size changed: %dx%d -> %dx%d", f->_last_render_parent_w,
-		     f->_last_render_parent_h, pw, ph);
+		blog(LOG_WARNING, "[trackerzoomer-filter] render parent size changed: %dx%d -> %dx%d",
+		     f->_last_render_parent_w, f->_last_render_parent_h, pw, ph);
 		f->_last_render_parent_w = pw;
 		f->_last_render_parent_h = ph;
 		f->_last_render_log_ns = rnow;
@@ -1518,8 +1529,8 @@ static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
 		// Log begin failures at most once per second.
 		if (!f->_last_render_log_ns || (rnow - f->_last_render_log_ns) > 1000000000ULL) {
 			blog(LOG_WARNING,
-			     "[trackerzoomer-filter] process_filter_begin failed (parent %dx%d, last frame %dx%d fmt=%d)", pw, ph,
-			     f->_last_frame_w, f->_last_frame_h, f->_last_frame_format);
+			     "[trackerzoomer-filter] process_filter_begin failed (parent %dx%d, last frame %dx%d fmt=%d)",
+			     pw, ph, f->_last_frame_w, f->_last_frame_h, f->_last_frame_format);
 			f->_last_render_log_ns = rnow;
 		}
 		obs_source_skip_video_filter(f->context);
