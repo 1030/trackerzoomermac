@@ -22,30 +22,30 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE
 # --- AprilTag (AprilRobotics/apriltag) ---
 # Vendored for cross-platform builds (macOS + Windows/MSVC).
 set(APRILTAG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/apriltag")
-add_library(apriltag STATIC
-    "${APRILTAG_DIR}/apriltag.c"
-    "${APRILTAG_DIR}/apriltag_pose.c"
-    "${APRILTAG_DIR}/apriltag_quad_thresh.c"
-
-    "${APRILTAG_DIR}/common/g2d.c"
-    "${APRILTAG_DIR}/common/homography.c"
-    "${APRILTAG_DIR}/common/image_u8.c"
-    "${APRILTAG_DIR}/common/image_u8_parallel.c"
-    "${APRILTAG_DIR}/common/image_u8x3.c"
-    "${APRILTAG_DIR}/common/image_u8x4.c"
-    "${APRILTAG_DIR}/common/matd.c"
-    "${APRILTAG_DIR}/common/pthreads_cross.c"
-    "${APRILTAG_DIR}/common/pnm.c"
-    "${APRILTAG_DIR}/common/svd22.c"
-    "${APRILTAG_DIR}/common/time_util.c"
-    "${APRILTAG_DIR}/common/unionfind.c"
-    "${APRILTAG_DIR}/common/workerpool.c"
-    "${APRILTAG_DIR}/common/zarray.c"
-    "${APRILTAG_DIR}/common/zhash.c"
-    "${APRILTAG_DIR}/common/zmaxheap.c"
-
-    # Tag family: match Python default (tag16h5)
-    "${APRILTAG_DIR}/tag16h5.c"
+add_library(
+  apriltag
+  STATIC
+  "${APRILTAG_DIR}/apriltag.c"
+  "${APRILTAG_DIR}/apriltag_pose.c"
+  "${APRILTAG_DIR}/apriltag_quad_thresh.c"
+  "${APRILTAG_DIR}/common/g2d.c"
+  "${APRILTAG_DIR}/common/homography.c"
+  "${APRILTAG_DIR}/common/image_u8.c"
+  "${APRILTAG_DIR}/common/image_u8_parallel.c"
+  "${APRILTAG_DIR}/common/image_u8x3.c"
+  "${APRILTAG_DIR}/common/image_u8x4.c"
+  "${APRILTAG_DIR}/common/matd.c"
+  "${APRILTAG_DIR}/common/pthreads_cross.c"
+  "${APRILTAG_DIR}/common/pnm.c"
+  "${APRILTAG_DIR}/common/svd22.c"
+  "${APRILTAG_DIR}/common/time_util.c"
+  "${APRILTAG_DIR}/common/unionfind.c"
+  "${APRILTAG_DIR}/common/workerpool.c"
+  "${APRILTAG_DIR}/common/zarray.c"
+  "${APRILTAG_DIR}/common/zhash.c"
+  "${APRILTAG_DIR}/common/zmaxheap.c"
+  # Tag family: match Python default (tag16h5)
+  "${APRILTAG_DIR}/tag16h5.c"
 )
 
 target_include_directories(apriltag PUBLIC "${APRILTAG_DIR}" "${APRILTAG_DIR}/common")
@@ -59,7 +59,10 @@ if(MSVC)
   # Our CI enables warnings-as-errors globally; apriltag upstream produces a number
   # of harmless conversion/macro warnings under MSVC. Disable "treat warnings as errors"
   # and silence the noisy ones for this vendored library.
-  target_compile_options(apriltag PRIVATE /WX- /wd4005 /wd4068 /wd4244 /wd4267)
+  target_compile_options(
+    apriltag
+    PRIVATE /WX- /wd4005 /wd4068 /wd4244 /wd4267
+  )
 else()
   # Our project uses very strict warnings-as-errors; apriltag upstream is clean
   # but can trip on warnings treated as errors under Clang.
@@ -67,9 +70,9 @@ else()
 endif()
 
 # Ensure apriltag is not built with warnings-as-errors under Xcode
-set_target_properties(apriltag PROPERTIES
-  XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS "NO"
-  XCODE_ATTRIBUTE_CLANG_TREAT_WARNINGS_AS_ERRORS "NO"
+set_target_properties(
+  apriltag
+  PROPERTIES XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS "NO" XCODE_ATTRIBUTE_CLANG_TREAT_WARNINGS_AS_ERRORS "NO"
 )
 
 # Our plugin links apriltag statically.

@@ -1,7 +1,6 @@
 #include <obs-module.h>
 #include <graphics/graphics.h>
 #include <util/platform.h>
-#include <util/threading.h>
 
 #if defined(HAVE_OBS_FRONTEND_API)
 #include <obs/obs-frontend-api.h>
