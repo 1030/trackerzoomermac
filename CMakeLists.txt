@@ -95,4 +95,10 @@ endif()
 
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.c src/trackerzoomer-filter.c)
 
+# CI enables warnings-as-errors globally; keep it for our code, but MSVC is
+# extremely noisy about implicit conversions in this codebase + vendored headers.
+if(MSVC)
+  target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE /WX- /wd4244 /wd4267 /wd4028)
+endif()
+
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
