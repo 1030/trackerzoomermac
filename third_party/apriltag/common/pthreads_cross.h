@@ -83,6 +83,7 @@ int sched_yield(void);
 #endif
 #endif /* !APRILTAG_PTHREADS_EXTERNAL */
 
+#endif /* _WIN32 */
 
 #ifdef __cplusplus
 extern "C" {
