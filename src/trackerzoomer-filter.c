@@ -1007,17 +1007,19 @@ static void apply_transform_task(void *param)
 	if (!t)
 		return;
 
-	obs_source_t *self = obs_weak_source_get_source(t->self_weak);
-	if (!self)
-		goto cleanup;
-
-	obs_source_t *parent = obs_filter_get_parent(self);
-	if (!parent)
-		goto cleanup;
-
+	obs_source_t *self = NULL;
+	obs_source_t *parent = NULL;
 	obs_source_t *scene_source = NULL;
 	obs_scene_t *scene = NULL;
 	obs_sceneitem_t *item = NULL;
+
+	self = obs_weak_source_get_source(t->self_weak);
+	if (!self)
+		goto cleanup;
+
+	parent = obs_filter_get_parent(self);
+	if (!parent)
+		goto cleanup;
 
 #if defined(HAVE_OBS_FRONTEND_API)
 	scene_source = obs_frontend_get_current_scene();
