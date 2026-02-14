@@ -1282,9 +1282,8 @@ static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
 static struct obs_source_info trackerzoomer_filter_info = {
 	.id = "trackerzoomer_filter",
 	.type = OBS_SOURCE_TYPE_FILTER,
-	// Use the GPU render filter path only. This avoids async filter_video pipeline quirks
-	// that can cause intermittent black/cropped frames on macOS webcam sources.
-	.output_flags = 0,
+	// Rendered video filter.
+	.output_flags = OBS_SOURCE_VIDEO,
 	.get_name = trackerzoomer_filter_get_name,
 	.get_defaults = trackerzoomer_filter_defaults,
 	.create = trackerzoomer_filter_create,
