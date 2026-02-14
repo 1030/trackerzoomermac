@@ -992,24 +992,32 @@ static bool find_item_cb(obs_scene_t *scene, obs_sceneitem_t *item, void *param)
 	return !ctx->found; // continue until found
 }
 
+struct apply_transform_task_data {
+	obs_weak_source_t *self_weak;
+	float want_x;
+	float want_y;
+	float want_s;
+	bool set_pos;
+	bool set_scale;
+};
+
 static void apply_transform_task(void *param)
 {
-	struct trackerzoomer_filter *f = param;
-	if (!f)
+	struct apply_transform_task_data *t = param;
+	if (!t)
 		return;
 
-	if (!f->enable_tracking)
-		return;
+	obs_source_t *self = obs_weak_source_get_source(t->self_weak);
+	if (!self)
+		goto cleanup;
 
-	obs_source_t *parent = NULL;
+	obs_source_t *parent = obs_filter_get_parent(self);
+	if (!parent)
+		goto cleanup;
+
 	obs_source_t *scene_source = NULL;
 	obs_scene_t *scene = NULL;
 	obs_sceneitem_t *item = NULL;
-
-	if (f->parent_weak)
-		parent = obs_weak_source_get_source(f->parent_weak);
-	if (!parent)
-		goto cleanup;
 
 #if defined(HAVE_OBS_FRONTEND_API)
 	scene_source = obs_frontend_get_current_scene();
@@ -1017,7 +1025,6 @@ static void apply_transform_task(void *param)
 		goto cleanup;
 #else
 	// Frontend API not available (headless build / CI configuration).
-	// We can’t locate the current scene item, so just skip applying transforms.
 	goto cleanup;
 #endif
 
@@ -1036,35 +1043,17 @@ static void apply_transform_task(void *param)
 		obs_sceneitem_addref(item);
 
 	if (item) {
-		// Apply a coherent snapshot captured on the tick thread.
-		float want_x = 0.0f, want_y = 0.0f, want_s = 1.0f;
-		pthread_mutex_lock(&f->xform_mutex);
-		want_x = f->apply_pos_x;
-		want_y = f->apply_pos_y;
-		want_s = f->apply_scale_val;
-		pthread_mutex_unlock(&f->xform_mutex);
-
-		if (!f->apply_translation) {
-			want_x = f->_last_applied_pos_x;
-			want_y = f->_last_applied_pos_y;
-		}
-		if (!f->apply_scale) {
-			want_s = f->_last_applied_scale;
-		}
-
-		// Only set alignment once; changing it every tick can cause unnecessary churn.
-		// (OBS stores alignment in the scene item, not the source.)
 		if (obs_sceneitem_get_alignment(item) != OBS_ALIGN_CENTER)
 			obs_sceneitem_set_alignment(item, OBS_ALIGN_CENTER);
 
-		struct vec2 pos = {want_x, want_y};
-		struct vec2 scale = {want_s, want_s};
-		obs_sceneitem_set_pos(item, &pos);
-		obs_sceneitem_set_scale(item, &scale);
-
-		f->_last_applied_pos_x = want_x;
-		f->_last_applied_pos_y = want_y;
-		f->_last_applied_scale = want_s;
+		if (t->set_pos) {
+			struct vec2 pos = {t->want_x, t->want_y};
+			obs_sceneitem_set_pos(item, &pos);
+		}
+		if (t->set_scale) {
+			struct vec2 scale = {t->want_s, t->want_s};
+			obs_sceneitem_set_scale(item, &scale);
+		}
 	}
 
 cleanup:
@@ -1074,6 +1063,11 @@ cleanup:
 		obs_source_release(scene_source);
 	if (parent)
 		obs_source_release(parent);
+	if (self)
+		obs_source_release(self);
+	if (t->self_weak)
+		obs_weak_source_release(t->self_weak);
+	bfree(t);
 }
 
 static void feed_pending_from_frame(struct trackerzoomer_filter *f, struct obs_source_frame *frame)
@@ -1451,7 +1445,20 @@ static void trackerzoomer_filter_tick(void *data, float seconds)
 		return;
 
 	f->_transform_dirty = false;
-	obs_queue_task(OBS_TASK_UI, apply_transform_task, f, false);
+
+	struct apply_transform_task_data *t = bzalloc(sizeof(*t));
+	t->self_weak = obs_source_get_weak_source(f->context);
+	t->want_x = want_x;
+	t->want_y = want_y;
+	t->want_s = want_s;
+	t->set_pos = f->apply_translation;
+	t->set_scale = f->apply_scale;
+	obs_queue_task(OBS_TASK_UI, apply_transform_task, t, false);
+
+	// Optimistically record what we *intend* to apply so tick doesn't spam tasks.
+	f->_last_applied_pos_x = want_x;
+	f->_last_applied_pos_y = want_y;
+	f->_last_applied_scale = want_s;
 }
 
 static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct obs_source_frame *frame)
