@@ -810,9 +810,16 @@ static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *sou
 	f->td->qtp.deglitch = 0;
 
 	// worker thread
+#if defined(_WIN32)
+	// Temporarily disable the apriltag worker on Windows while stabilizing the
+	// new render-crop architecture.
+	f->worker_event = NULL;
+	f->worker_running = false;
+#else
 	os_event_init(&f->worker_event, OS_EVENT_TYPE_AUTO);
 	f->worker_running = true;
 	pthread_create(&f->worker_thread, NULL, worker_main, f);
+#endif
 
 	obs_source_update(source, settings);
 	return f;
@@ -825,12 +832,15 @@ static void trackerzoomer_filter_destroy(void *data)
 		return;
 
 	// stop worker
-	f->worker_running = false;
-	if (f->worker_event)
-		os_event_signal(f->worker_event);
-	pthread_join(f->worker_thread, NULL);
-	if (f->worker_event)
-		os_event_destroy(f->worker_event);
+	if (f->worker_running) {
+		f->worker_running = false;
+		if (f->worker_event)
+			os_event_signal(f->worker_event);
+		pthread_join(f->worker_thread, NULL);
+		if (f->worker_event)
+			os_event_destroy(f->worker_event);
+		f->worker_event = NULL;
+	}
 
 	pthread_mutex_lock(&f->frame_mutex);
 	free_gray_frame(&f->pending);
@@ -1219,6 +1229,7 @@ static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct ob
 	// This avoids polling the parent source, which can degrade macOS webcam feed
 	// quality (stutter/glitches) due to internal locking/conversion.
 	if (f->enable_tracking) {
+#if !defined(_WIN32)
 		const uint64_t now = os_gettime_ns();
 		const float fps = (f->detect_fps > 0.1f) ? f->detect_fps : 30.0f;
 		const uint64_t interval = (uint64_t)(1000000000.0 / (double)fps);
@@ -1228,6 +1239,9 @@ static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct ob
 			f->_video_frame_seq++;
 			feed_pending_from_frame(f, frame);
 		}
+#else
+		// Disabled on Windows for stabilization.
+#endif
 	}
 
 	return frame;
