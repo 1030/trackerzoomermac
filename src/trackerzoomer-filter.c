@@ -973,6 +973,7 @@ static obs_properties_t *trackerzoomer_filter_properties(void *data)
 	return props;
 }
 
+#if !defined(_WIN32)
 static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
 {
 	struct trackerzoomer_filter *f = data;
@@ -1349,6 +1350,7 @@ static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
 
 	obs_source_process_filter_end(f->context, fx, 0, 0);
 }
+#endif
 
 static struct obs_source_info trackerzoomer_filter_info = {
 	.id = "trackerzoomer_filter",
