@@ -39,6 +39,11 @@ struct gray_frame {
 	uint64_t frame_seq;
 };
 
+#if defined(_WIN32)
+struct trackerzoomer_filter {
+	obs_source_t *context;
+};
+#else
 struct trackerzoomer_filter {
 	obs_source_t *context;
 	obs_weak_source_t *parent_weak;
@@ -168,6 +173,7 @@ struct trackerzoomer_filter {
 	apriltag_detector_t *td;
 	apriltag_family_t *tf;
 };
+#endif
 
 static const char *trackerzoomer_filter_get_name(void *unused)
 {
@@ -768,9 +774,6 @@ static void *worker_main(void *param)
 // Windows emergency-safe implementation:
 // Provide a minimal passthrough filter under the SAME id (trackerzoomer_filter)
 // so scene collections can load without crashing while we debug the real impl.
-struct trackerzoomer_filter {
-	obs_source_t *context;
-};
 
 static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *source)
 {
