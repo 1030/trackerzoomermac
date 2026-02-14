@@ -798,6 +798,7 @@ static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *sou
 	// (release) debug overlays removed
 
 	// detector setup (tag16h5)
+#if !defined(_WIN32)
 	f->tf = tag16h5_create();
 	f->td = apriltag_detector_create();
 	apriltag_detector_add_family_bits(f->td, f->tf, 1);
@@ -808,6 +809,11 @@ static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *sou
 	f->td->refine_edges = 1;
 	f->td->decode_sharpening = 0.25f;
 	f->td->qtp.deglitch = 0;
+#else
+	// Disabled on Windows while stabilizing plugin lifecycle.
+	f->tf = NULL;
+	f->td = NULL;
+#endif
 
 	// worker thread
 #if defined(_WIN32)
