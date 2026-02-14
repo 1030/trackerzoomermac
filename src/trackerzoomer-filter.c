@@ -1184,13 +1184,8 @@ static void trackerzoomer_filter_tick(void *data, float seconds)
 	if (!f)
 		return;
 
-	// Ensure we have a weak ref to the parent source even though we no longer
-	// rely on filter_video callbacks.
-	obs_source_t *parent_strong = obs_filter_get_parent(f->context);
-	if (parent_strong) {
-		if (!f->parent_weak)
-			f->parent_weak = obs_source_get_weak_source(parent_strong);
-	}
+	// Avoid touching parent source from the tick thread; this can contend with
+	// OBS internals during settings saves and lead to UI hangs.
 
 	if (!f->enable_tracking)
 		return;
@@ -1467,12 +1462,7 @@ static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct ob
 	if (!f || !frame)
 		return frame;
 
-	// Cache parent weak ref.
-	obs_source_t *parent = obs_filter_get_parent(f->context);
-	if (parent) {
-		if (!f->parent_weak)
-			f->parent_weak = obs_source_get_weak_source(parent);
-	}
+	// Don't query parent source here; keep this callback as lightweight as possible.
 
 	// Preferred path: get analysis frames from the filter_video callback.
 	// This avoids polling the parent source, which can degrade macOS webcam feed
