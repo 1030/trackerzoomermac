@@ -1536,7 +1536,7 @@ static struct obs_source_info trackerzoomer_filter_info = {
 	.update = trackerzoomer_filter_update,
 	.video_tick = trackerzoomer_filter_tick,
 	.filter_video = trackerzoomer_filter_video,
-	.video_render = trackerzoomer_filter_video_render,
+	.video_render = NULL,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
