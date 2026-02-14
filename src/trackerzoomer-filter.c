@@ -13,6 +13,22 @@
 #include "apriltag.h"
 #include "tag16h5.h"
 
+// Render-crop shader (samples sub-rectangle of input texture)
+static gs_effect_t *g_trackerzoomer_crop_effect = NULL;
+static gs_eparam_t *g_param_mul = NULL;
+static gs_eparam_t *g_param_add = NULL;
+
+static const char *k_trackerzoomer_crop_effect_src =
+	"uniform float4x4 ViewProj;\n"
+	"uniform texture2d image;\n"
+	"uniform float2 mul_val;\n"
+	"uniform float2 add_val;\n"
+	"sampler_state linearSampler { Filter = Linear; AddressU = Clamp; AddressV = Clamp; };\n"
+	"struct VertData { float4 pos : POSITION; float2 uv : TEXCOORD0; };\n"
+	"VertData VSDefault(VertData v_in) { VertData v_out; v_out.pos = mul(v_in.pos, ViewProj); v_out.uv = v_in.uv; return v_out; }\n"
+	"float4 PSDefault(VertData v_in) : TARGET { float2 uv = v_in.uv * mul_val + add_val; return image.Sample(linearSampler, uv); }\n"
+	"technique Draw { pass { vertex_shader = VSDefault(v_in); pixel_shader = PSDefault(v_in); } }\n";
+
 struct gray_frame {
 	uint8_t *data;
 	int width;  // detection buffer width
@@ -142,6 +158,10 @@ struct trackerzoomer_filter {
 	float apply_pos_y;
 	float apply_scale_val;
 	uint64_t suspend_ui_until_ns;
+	float render_mul_x;
+	float render_mul_y;
+	float render_add_x;
+	float render_add_y;
 
 	// (release) debug overlay fields removed
 
@@ -771,6 +791,10 @@ static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *sou
 	f->apply_pos_y = 0.0f;
 	f->apply_scale_val = 1.0f;
 	f->suspend_ui_until_ns = 0;
+	f->render_mul_x = 1.0f;
+	f->render_mul_y = 1.0f;
+	f->render_add_x = 0.0f;
+	f->render_add_y = 0.0f;
 	// (release) debug overlays removed
 
 	// detector setup (tag16h5)
@@ -986,99 +1010,6 @@ static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
 	f->_transform_dirty = true;
 }
 
-static bool find_item_cb(obs_scene_t *scene, obs_sceneitem_t *item, void *param)
-{
-	UNUSED_PARAMETER(scene);
-	struct {
-		obs_source_t *parent;
-		obs_sceneitem_t *found;
-	} *ctx = param;
-
-	if (!ctx->found && obs_sceneitem_get_source(item) == ctx->parent)
-		ctx->found = item;
-	return !ctx->found; // continue until found
-}
-
-struct apply_transform_task_data {
-	obs_weak_source_t *self_weak;
-	float want_x;
-	float want_y;
-	float want_s;
-	bool set_pos;
-	bool set_scale;
-};
-
-static void apply_transform_task(void *param)
-{
-	struct apply_transform_task_data *t = param;
-	if (!t)
-		return;
-
-	obs_source_t *self = NULL;
-	obs_source_t *parent = NULL;
-	obs_source_t *scene_source = NULL;
-	obs_scene_t *scene = NULL;
-	obs_sceneitem_t *item = NULL;
-
-	self = obs_weak_source_get_source(t->self_weak);
-	if (!self)
-		goto cleanup;
-
-	parent = obs_filter_get_parent(self);
-	if (!parent)
-		goto cleanup;
-
-#if defined(HAVE_OBS_FRONTEND_API)
-	scene_source = obs_frontend_get_current_scene();
-	if (!scene_source)
-		goto cleanup;
-#else
-	// Frontend API not available (headless build / CI configuration).
-	goto cleanup;
-#endif
-
-	scene = obs_scene_from_source(scene_source);
-	if (!scene)
-		goto cleanup;
-
-	struct {
-		obs_source_t *parent;
-		obs_sceneitem_t *found;
-	} ctx = {.parent = parent, .found = NULL};
-
-	obs_scene_enum_items(scene, find_item_cb, &ctx);
-	item = ctx.found;
-	if (item)
-		obs_sceneitem_addref(item);
-
-	if (item) {
-		if (obs_sceneitem_get_alignment(item) != OBS_ALIGN_CENTER)
-			obs_sceneitem_set_alignment(item, OBS_ALIGN_CENTER);
-
-		if (t->set_pos) {
-			struct vec2 pos = {t->want_x, t->want_y};
-			obs_sceneitem_set_pos(item, &pos);
-		}
-		if (t->set_scale) {
-			struct vec2 scale = {t->want_s, t->want_s};
-			obs_sceneitem_set_scale(item, &scale);
-		}
-	}
-
-cleanup:
-	if (item)
-		obs_sceneitem_release(item);
-	if (scene_source)
-		obs_source_release(scene_source);
-	if (parent)
-		obs_source_release(parent);
-	if (self)
-		obs_source_release(self);
-	if (t->self_weak)
-		obs_weak_source_release(t->self_weak);
-	bfree(t);
-}
-
 static void feed_pending_from_frame(struct trackerzoomer_filter *f, struct obs_source_frame *frame)
 {
 	if (!f || !frame)
@@ -1187,292 +1118,91 @@ static void trackerzoomer_filter_tick(void *data, float seconds)
 	if (!f)
 		return;
 
-	// Avoid touching parent source from the tick thread; this can contend with
-	// OBS internals during settings saves and lead to UI hangs.
-
-	if (!f->enable_tracking)
+	// When tracking is off, render full frame.
+	if (!f->enable_tracking) {
+		pthread_mutex_lock(&f->xform_mutex);
+		f->render_mul_x = 1.0f;
+		f->render_mul_y = 1.0f;
+		f->render_add_x = 0.0f;
+		f->render_add_y = 0.0f;
+		pthread_mutex_unlock(&f->xform_mutex);
 		return;
-
-	// Analysis frames are obtained via filter_video callback (fixed).
-
-	// Apply at capped rate based on OBS video FPS so easing stays smooth even if detection is sparse.
-	uint64_t interval_ns = 16666666ULL;
-	struct obs_video_info ovi_fps;
-	if (obs_get_video_info(&ovi_fps) && ovi_fps.fps_num > 0 && ovi_fps.fps_den > 0) {
-		interval_ns = (uint64_t)(1000000000ULL * (uint64_t)ovi_fps.fps_den / (uint64_t)ovi_fps.fps_num);
-		// clamp to a sane range (30–240 Hz)
-		if (interval_ns < 4166666ULL)
-			interval_ns = 4166666ULL;
-		if (interval_ns > 33333333ULL)
-			interval_ns = 33333333ULL;
 	}
-	const uint64_t now_ns = os_gettime_ns();
-	const uint64_t last_apply_ns = f->_last_apply_ns;
-	if (last_apply_ns && (now_ns - last_apply_ns) < interval_ns)
-		return;
 
-	// ROI source: tracking-derived ROI only
-	float roi_cx = 0.0f;
-	float roi_cy = 0.0f;
-	float roi_w = 0.0f;
-	float roi_h = 0.0f;
+	// Determine ROI from worker-produced auto ROI (smoothed).
+	bool raw_valid = false;
+	float raw_cx = 0.0f, raw_cy = 0.0f, raw_w = 0.0f, raw_h = 0.0f;
+	pthread_mutex_lock(&f->frame_mutex);
+	raw_valid = f->auto_roi_valid;
+	if (raw_valid) {
+		raw_cx = f->auto_roi_cx;
+		raw_cy = f->auto_roi_cy;
+		raw_w = f->auto_roi_w;
+		raw_h = f->auto_roi_h;
+	}
+	pthread_mutex_unlock(&f->frame_mutex);
+
+	float roi_cx = 0.0f, roi_cy = 0.0f, roi_w = 0.0f, roi_h = 0.0f;
 	bool use_roi = false;
-	bool want_full_frame = false;
-
-	if (f->enable_tracking) {
-		// Pull raw ROI under lock, but do smoothing outside the lock.
-		bool raw_valid = false;
-		float raw_cx = 0.0f, raw_cy = 0.0f, raw_w = 0.0f, raw_h = 0.0f;
-		pthread_mutex_lock(&f->frame_mutex);
-		raw_valid = f->auto_roi_valid;
-		if (raw_valid) {
-			raw_cx = f->auto_roi_cx;
-			raw_cy = f->auto_roi_cy;
-			raw_w = f->auto_roi_w;
-			raw_h = f->auto_roi_h;
-		}
-		pthread_mutex_unlock(&f->frame_mutex);
-
-		if (raw_valid) {
-			// Measurement smoothing (python parity). This reduces twitch before transform easing.
-			const float m_alpha = f->meas_alpha;
-			if (!f->smooth_roi_valid) {
-				f->smooth_roi_valid = true;
-				f->smooth_roi_cx = raw_cx;
-				f->smooth_roi_cy = raw_cy;
-				f->smooth_roi_w = raw_w;
-				f->smooth_roi_h = raw_h;
-			} else {
-				f->smooth_roi_cx += (raw_cx - f->smooth_roi_cx) * m_alpha;
-				f->smooth_roi_cy += (raw_cy - f->smooth_roi_cy) * m_alpha;
-				f->smooth_roi_w += (raw_w - f->smooth_roi_w) * m_alpha;
-				f->smooth_roi_h += (raw_h - f->smooth_roi_h) * m_alpha;
-			}
-
-			roi_cx = f->smooth_roi_cx;
-			roi_cy = f->smooth_roi_cy;
-			roi_w = f->smooth_roi_w;
-			roi_h = f->smooth_roi_h;
-			use_roi = true;
+	if (raw_valid) {
+		const float m_alpha = f->meas_alpha;
+		if (!f->smooth_roi_valid) {
+			f->smooth_roi_valid = true;
+			f->smooth_roi_cx = raw_cx;
+			f->smooth_roi_cy = raw_cy;
+			f->smooth_roi_w = raw_w;
+			f->smooth_roi_h = raw_h;
 		} else {
-			f->smooth_roi_valid = false;
-			// No tags => show full frame.
-			want_full_frame = true;
+			f->smooth_roi_cx += (raw_cx - f->smooth_roi_cx) * m_alpha;
+			f->smooth_roi_cy += (raw_cy - f->smooth_roi_cy) * m_alpha;
+			f->smooth_roi_w += (raw_w - f->smooth_roi_w) * m_alpha;
+			f->smooth_roi_h += (raw_h - f->smooth_roi_h) * m_alpha;
+		}
+		roi_cx = f->smooth_roi_cx;
+		roi_cy = f->smooth_roi_cy;
+		roi_w = f->smooth_roi_w;
+		roi_h = f->smooth_roi_h;
+		use_roi = true;
+	} else {
+		f->smooth_roi_valid = false;
+	}
+
+	// Convert ROI to UV crop parameters.
+	float mul_x = 1.0f, mul_y = 1.0f, add_x = 0.0f, add_y = 0.0f;
+	if (use_roi && f->_last_frame_w > 0 && f->_last_frame_h > 0) {
+		const float fw = (float)f->_last_frame_w;
+		const float fh = (float)f->_last_frame_h;
+		if (roi_w < 1.0f)
+			roi_w = 1.0f;
+		if (roi_h < 1.0f)
+			roi_h = 1.0f;
+		float u0 = (roi_cx - roi_w * 0.5f) / fw;
+		float v0 = (roi_cy - roi_h * 0.5f) / fh;
+		float u1 = (roi_cx + roi_w * 0.5f) / fw;
+		float v1 = (roi_cy + roi_h * 0.5f) / fh;
+		// clamp
+		u0 = clampf(u0, 0.0f, 1.0f);
+		v0 = clampf(v0, 0.0f, 1.0f);
+		u1 = clampf(u1, 0.0f, 1.0f);
+		v1 = clampf(v1, 0.0f, 1.0f);
+		mul_x = (u1 - u0);
+		mul_y = (v1 - v0);
+		add_x = u0;
+		add_y = v0;
+		if (mul_x < 1e-4f || mul_y < 1e-4f) {
+			mul_x = 1.0f;
+			mul_y = 1.0f;
+			add_x = 0.0f;
+			add_y = 0.0f;
 		}
 	}
 
-	// Compute target from ROI if active, else full-frame, else manual transform.
-	// We compute a candidate target first, then apply a small deadband (python parity)
-	// to avoid chasing tiny detection noise.
-	float cand_pos_x = f->target_pos_x;
-	float cand_pos_y = f->target_pos_y;
-	float cand_scale = f->target_scale;
-	if (want_full_frame && f->parent_weak) {
-		obs_source_t *parent = obs_weak_source_get_source(f->parent_weak);
-		if (parent) {
-			uint32_t frame_w = obs_source_get_width(parent);
-			uint32_t frame_h = obs_source_get_height(parent);
-			obs_source_release(parent);
-
-			struct obs_video_info ovi;
-			if (obs_get_video_info(&ovi) && frame_w > 0 && frame_h > 0) {
-				const float canvas_w = (float)ovi.base_width;
-				const float canvas_h = (float)ovi.base_height;
-				const float sx = canvas_w / (float)frame_w;
-				const float sy = canvas_h / (float)frame_h;
-				float scale = (sx < sy) ? sx : sy;
-				if (scale <= 0.0f)
-					scale = 1.0f;
-
-				cand_pos_x = canvas_w * 0.5f;
-				cand_pos_y = canvas_h * 0.5f;
-				cand_scale = scale;
-			}
-		}
-	} else if (use_roi && f->parent_weak) {
-		obs_source_t *parent = obs_weak_source_get_source(f->parent_weak);
-		if (parent) {
-			uint32_t frame_w = obs_source_get_width(parent);
-			uint32_t frame_h = obs_source_get_height(parent);
-			obs_source_release(parent);
-
-			struct obs_video_info ovi;
-			if (obs_get_video_info(&ovi) && frame_w > 0 && frame_h > 0) {
-				if (roi_w < 1.0f)
-					roi_w = 1.0f;
-				if (roi_h < 1.0f)
-					roi_h = 1.0f;
-
-				// Note: ROI sizing/clamping is handled earlier (python-parity) when we build the ROI.
-				// Avoid imposing an extra minimum ROI here; it causes the "both tags fully in view"
-				// zone as tags get close.
-
-				const float half_w = roi_w * 0.5f;
-				const float half_h = roi_h * 0.5f;
-				float cx = roi_cx;
-				float cy = roi_cy;
-				if (cx < half_w)
-					cx = half_w;
-				if (cy < half_h)
-					cy = half_h;
-				if (cx > (float)frame_w - half_w)
-					cx = (float)frame_w - half_w;
-				if (cy > (float)frame_h - half_h)
-					cy = (float)frame_h - half_h;
-
-				const float canvas_w = (float)ovi.base_width;
-				const float canvas_h = (float)ovi.base_height;
-				const float sx = canvas_w / (roi_w > 0.001f ? roi_w : 0.001f);
-				const float sy = canvas_h / (roi_h > 0.001f ? roi_h : 0.001f);
-				float scale = (sx < sy) ? sx : sy;
-				if (scale > 8.0f)
-					scale = 8.0f;
-
-				const float fx = (float)frame_w * 0.5f;
-				const float fy = (float)frame_h * 0.5f;
-
-				float pos_x = canvas_w * 0.5f - (cx - fx) * scale;
-				float pos_y = canvas_h * 0.5f - (cy - fy) * scale;
-
-				// Clamp translation so the scaled source still covers the canvas.
-				// This prevents revealing black behind the source when ROI is near edges.
-				if (f->clamp_to_canvas) {
-					const float margin = f->clamp_margin_px;
-					const float disp_w = (float)frame_w * scale;
-					const float disp_h = (float)frame_h * scale;
-					const float half_disp_w = disp_w * 0.5f;
-					const float half_disp_h = disp_h * 0.5f;
-
-					// With center alignment, pos is the center of the displayed source.
-					float min_x = (canvas_w - margin) - half_disp_w;
-					float max_x = margin + half_disp_w;
-					float min_y = (canvas_h - margin) - half_disp_h;
-					float max_y = margin + half_disp_h;
-
-					// If the displayed source is smaller than the canvas in a dimension,
-					// clamping can't prevent bars; fall back to centered.
-					if (min_x > max_x) {
-						min_x = max_x = canvas_w * 0.5f;
-					}
-					if (min_y > max_y) {
-						min_y = max_y = canvas_h * 0.5f;
-					}
-
-					pos_x = clampf(pos_x, min_x, max_x);
-					pos_y = clampf(pos_y, min_y, max_y);
-				}
-
-				cand_pos_x = pos_x;
-				cand_pos_y = pos_y;
-				cand_scale = scale;
-			}
-		}
-	}
-
-	if (f->freeze_transform) {
-		// Still run detection + update internal ROI, but don't change the applied transform.
-		f->_last_apply_ns = now_ns;
-		return;
-	}
-
-	// Jump guard: clamp the candidate target step so a single bad detection can't fling the frame.
-	if (f->jump_guard) {
-		const float dxg = cand_pos_x - f->target_pos_x;
-		const float dyg = cand_pos_y - f->target_pos_y;
-		const float dsg = cand_scale - f->target_scale;
-		if (f->max_pos_jump_px > 0.0f) {
-			cand_pos_x = f->target_pos_x + clampf(dxg, -f->max_pos_jump_px, f->max_pos_jump_px);
-			cand_pos_y = f->target_pos_y + clampf(dyg, -f->max_pos_jump_px, f->max_pos_jump_px);
-		}
-		if (f->max_scale_jump > 0.0f) {
-			cand_scale = f->target_scale + clampf(dsg, -f->max_scale_jump, f->max_scale_jump);
-		}
-	}
-
-	// Deadband on target updates (python parity). Prevents micro jitter.
-	const float min_pos_delta = 2.0f;     // pixels
-	const float min_scale_delta = 0.002f; // absolute scale
-	const float dx_t = cand_pos_x - f->target_pos_x;
-	const float dy_t = cand_pos_y - f->target_pos_y;
-	const float ds_t = cand_scale - f->target_scale;
-	if (fabsf(dx_t) >= min_pos_delta || fabsf(dy_t) >= min_pos_delta || fabsf(ds_t) >= min_scale_delta) {
-		f->target_pos_x = cand_pos_x;
-		f->target_pos_y = cand_pos_y;
-		f->target_scale = cand_scale;
-	}
-
-	// Exponential smoothing towards target (cheap + stable).
-	// alpha = 1 - exp(-dt/tau)
-	// tau is hardcoded to 0.5s (python parity)
-	const float tau = f->ease_tau;
-	float alpha = 1.0f;
-	if (tau > 0.0001f) {
-		float dt = (float)interval_ns / 1000000000.0f;
-		if (last_apply_ns) {
-			dt = (float)(now_ns - last_apply_ns) / 1000000000.0f;
-			if (dt < 0.0f)
-				dt = 0.0f;
-			if (dt > 0.5f)
-				dt = 0.5f; // avoid huge jumps after stalls
-		}
-		alpha = 1.0f - expf(-dt / tau);
-		if (alpha < 0.0f)
-			alpha = 0.0f;
-		if (alpha > 1.0f)
-			alpha = 1.0f;
-	}
-
-	f->cur_pos_x += (f->target_pos_x - f->cur_pos_x) * alpha;
-	f->cur_pos_y += (f->target_pos_y - f->cur_pos_y) * alpha;
-	f->cur_scale += (f->target_scale - f->cur_scale) * alpha;
-
-	// Capture a coherent snapshot for the UI thread apply.
 	pthread_mutex_lock(&f->xform_mutex);
-	f->apply_pos_x = f->cur_pos_x;
-	f->apply_pos_y = f->cur_pos_y;
-	f->apply_scale_val = f->cur_scale;
+	f->render_mul_x = mul_x;
+	f->render_mul_y = mul_y;
+	f->render_add_x = add_x;
+	f->render_add_y = add_y;
 	pthread_mutex_unlock(&f->xform_mutex);
-
-	const float want_x = f->cur_pos_x;
-	const float want_y = f->cur_pos_y;
-	const float want_s = f->cur_scale;
-
-	// Python parity: suppress tiny updates to avoid micro-jitter.
-	const float pos_thresh = 1.0f;        // pixels
-	const float scale_rel_thresh = 0.01f; // 1%
-	const float dx = fabsf(want_x - f->_last_applied_pos_x);
-	const float dy = fabsf(want_y - f->_last_applied_pos_y);
-	const float s_last = f->_last_applied_scale;
-	const float ds_rel = fabsf(want_s - s_last) / (fabsf(s_last) > 1e-6f ? fabsf(s_last) : 1e-6f);
-	const bool changed = f->_transform_dirty || (dx >= pos_thresh) || (dy >= pos_thresh) ||
-			     (ds_rel >= scale_rel_thresh);
-
-	// Always advance apply time for stable dt/alpha, even if we skip UI update.
-	f->_last_apply_ns = now_ns;
-
-	if (!changed)
-		return;
-
-	// Avoid deadlocking with OBS source settings saves: do not queue UI tasks while
-	// we're within the post-update grace period.
-	if (now_ns < f->suspend_ui_until_ns)
-		return;
-
-	f->_transform_dirty = false;
-
-	struct apply_transform_task_data *t = bzalloc(sizeof(*t));
-	t->self_weak = obs_source_get_weak_source(f->context);
-	t->want_x = want_x;
-	t->want_y = want_y;
-	t->want_s = want_s;
-	t->set_pos = f->apply_translation;
-	t->set_scale = f->apply_scale;
-	obs_queue_task(OBS_TASK_UI, apply_transform_task, t, false);
-
-	// Optimistically record what we *intend* to apply so tick doesn't spam tasks.
-	f->_last_applied_pos_x = want_x;
-	f->_last_applied_pos_y = want_y;
-	f->_last_applied_scale = want_s;
 }
 
 static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct obs_source_frame *frame)
@@ -1510,28 +1240,43 @@ static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
 	if (!f)
 		return;
 
-	// Forensics: track when the parent source size changes or filter_begin fails.
-	int pw = 0, ph = 0;
-	obs_source_t *parent = obs_filter_get_parent(f->context);
-	if (parent) {
-		pw = (int)obs_source_get_base_width(parent);
-		ph = (int)obs_source_get_base_height(parent);
-	}
-	const uint64_t rnow = os_gettime_ns();
-	const bool size_changed = (pw != 0 && ph != 0) &&
-				  (pw != f->_last_render_parent_w || ph != f->_last_render_parent_h);
-	if (size_changed) {
-		blog(LOG_WARNING, "[trackerzoomer-filter] render parent size changed: %dx%d -> %dx%d",
-		     f->_last_render_parent_w, f->_last_render_parent_h, pw, ph);
-		f->_last_render_parent_w = pw;
-		f->_last_render_parent_h = ph;
-		f->_last_render_log_ns = rnow;
+	if (!g_trackerzoomer_crop_effect) {
+		g_trackerzoomer_crop_effect = gs_effect_create(k_trackerzoomer_crop_effect_src, NULL, NULL);
+		if (g_trackerzoomer_crop_effect) {
+			g_param_mul = gs_effect_get_param_by_name(g_trackerzoomer_crop_effect, "mul_val");
+			g_param_add = gs_effect_get_param_by_name(g_trackerzoomer_crop_effect, "add_val");
+		}
 	}
 
-	// This filter does not modify pixels; it only observes frames for analysis and then
-	// moves/scales the parent scene item. Keep the render path minimal to reduce contention
-	// with OBS internal locks during settings saves.
-	obs_source_skip_video_filter(f->context);
+	gs_effect_t *fx = g_trackerzoomer_crop_effect ? g_trackerzoomer_crop_effect
+						      : obs_get_base_effect(OBS_EFFECT_DEFAULT);
+	if (!fx) {
+		obs_source_skip_video_filter(f->context);
+		return;
+	}
+
+	float mul_x = 1.0f, mul_y = 1.0f, add_x = 0.0f, add_y = 0.0f;
+	pthread_mutex_lock(&f->xform_mutex);
+	mul_x = f->render_mul_x;
+	mul_y = f->render_mul_y;
+	add_x = f->render_add_x;
+	add_y = f->render_add_y;
+	pthread_mutex_unlock(&f->xform_mutex);
+
+	const bool began = obs_source_process_filter_begin(f->context, GS_RGBA, 0);
+	if (!began) {
+		obs_source_skip_video_filter(f->context);
+		return;
+	}
+
+	if (fx == g_trackerzoomer_crop_effect && g_param_mul && g_param_add) {
+		struct vec2 mul = {mul_x, mul_y};
+		struct vec2 add = {add_x, add_y};
+		gs_effect_set_vec2(g_param_mul, &mul);
+		gs_effect_set_vec2(g_param_add, &add);
+	}
+
+	obs_source_process_filter_end(f->context, fx, 0, 0);
 }
 
 static struct obs_source_info trackerzoomer_filter_info = {
@@ -1548,7 +1293,7 @@ static struct obs_source_info trackerzoomer_filter_info = {
 	.update = trackerzoomer_filter_update,
 	.video_tick = trackerzoomer_filter_tick,
 	.filter_video = trackerzoomer_filter_video,
-	.video_render = NULL,
+	.video_render = trackerzoomer_filter_video_render,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
