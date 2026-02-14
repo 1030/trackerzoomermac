@@ -1516,28 +1516,10 @@ static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
 		f->_last_render_log_ns = rnow;
 	}
 
-	// Minimal, safe pass-through (GPU path).
-	gs_effect_t *base = obs_get_base_effect(OBS_EFFECT_DEFAULT);
-	if (!base) {
-		obs_source_skip_video_filter(f->context);
-		return;
-	}
-
-	const bool began = obs_source_process_filter_begin(f->context, GS_RGBA, 0);
-	if (began) {
-		obs_source_process_filter_end(f->context, base, 0, 0);
-
-		// (release) debug overlays removed
-	} else {
-		// Log begin failures at most once per second.
-		if (!f->_last_render_log_ns || (rnow - f->_last_render_log_ns) > 1000000000ULL) {
-			blog(LOG_WARNING,
-			     "[trackerzoomer-filter] process_filter_begin failed (parent %dx%d, last frame %dx%d fmt=%d)",
-			     pw, ph, f->_last_frame_w, f->_last_frame_h, f->_last_frame_format);
-			f->_last_render_log_ns = rnow;
-		}
-		obs_source_skip_video_filter(f->context);
-	}
+	// This filter does not modify pixels; it only observes frames for analysis and then
+	// moves/scales the parent scene item. Keep the render path minimal to reduce contention
+	// with OBS internal locks during settings saves.
+	obs_source_skip_video_filter(f->context);
 }
 
 static struct obs_source_info trackerzoomer_filter_info = {
