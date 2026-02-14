@@ -945,23 +945,27 @@ static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
 
 	// (release) debug overlay settings removed
 
-	// Apply detector params (worker thread also uses td, so guard with td_mutex)
-	pthread_mutex_lock(&f->td_mutex);
-	if (f->td) {
-		// If we're doing our own external downscale, disable apriltag internal decimation.
-		f->td->quad_decimate = (f->downscale_mode == 0) ? 1.0f : clampf(f->quad_decimate, 1.0f, 6.0f);
-		f->td->quad_sigma = clampf(f->quad_sigma, 0.0f, 2.0f);
-		f->td->refine_edges = f->refine_edges ? 1 : 0;
-		f->td->decode_sharpening = clampf(f->decode_sharpening, 0.0f, 1.0f);
-		f->td->qtp.deglitch = f->deglitch ? 1 : 0;
-		f->td->qtp.min_cluster_pixels = f->min_cluster_pixels;
-		f->td->qtp.max_nmaxima = f->max_nmaxima;
-		f->td->qtp.critical_rad = f->critical_rad;
-		f->td->qtp.cos_critical_rad = cosf(f->critical_rad);
-		f->td->qtp.max_line_fit_mse = f->max_line_fit_mse;
-		f->td->qtp.min_white_black_diff = f->min_white_black_diff;
+	// Apply detector params (worker thread also uses td). IMPORTANT: avoid blocking the UI thread
+	// if the worker is currently inside apriltag_detector_detect().
+	if (pthread_mutex_trylock(&f->td_mutex) == 0) {
+		if (f->td) {
+			// If we're doing our own external downscale, disable apriltag internal decimation.
+			f->td->quad_decimate = (f->downscale_mode == 0) ? 1.0f : clampf(f->quad_decimate, 1.0f, 6.0f);
+			f->td->quad_sigma = clampf(f->quad_sigma, 0.0f, 2.0f);
+			f->td->refine_edges = f->refine_edges ? 1 : 0;
+			f->td->decode_sharpening = clampf(f->decode_sharpening, 0.0f, 1.0f);
+			f->td->qtp.deglitch = f->deglitch ? 1 : 0;
+			f->td->qtp.min_cluster_pixels = f->min_cluster_pixels;
+			f->td->qtp.max_nmaxima = f->max_nmaxima;
+			f->td->qtp.critical_rad = f->critical_rad;
+			f->td->qtp.cos_critical_rad = cosf(f->critical_rad);
+			f->td->qtp.max_line_fit_mse = f->max_line_fit_mse;
+			f->td->qtp.min_white_black_diff = f->min_white_black_diff;
+		}
+		pthread_mutex_unlock(&f->td_mutex);
+	} else {
+		blog(LOG_DEBUG, "[trackerzoomer-filter] detector busy; skipping td param update");
 	}
-	pthread_mutex_unlock(&f->td_mutex);
 
 	// easing tau was hardcoded; now exposed.
 
