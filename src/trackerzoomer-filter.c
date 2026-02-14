@@ -764,6 +764,69 @@ static void *worker_main(void *param)
 	return NULL;
 }
 
+#if defined(_WIN32)
+// Windows emergency-safe implementation:
+// Provide a minimal passthrough filter under the SAME id (trackerzoomer_filter)
+// so scene collections can load without crashing while we debug the real impl.
+struct trackerzoomer_filter {
+	obs_source_t *context;
+};
+
+static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *source)
+{
+	UNUSED_PARAMETER(settings);
+	struct trackerzoomer_filter *f = bzalloc(sizeof(*f));
+	f->context = source;
+	return f;
+}
+
+static void trackerzoomer_filter_destroy(void *data)
+{
+	struct trackerzoomer_filter *f = data;
+	bfree(f);
+}
+
+static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
+{
+	UNUSED_PARAMETER(data);
+	UNUSED_PARAMETER(settings);
+}
+
+static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct obs_source_frame *frame)
+{
+	UNUSED_PARAMETER(data);
+	return frame;
+}
+
+static void trackerzoomer_filter_tick(void *data, float seconds)
+{
+	UNUSED_PARAMETER(data);
+	UNUSED_PARAMETER(seconds);
+}
+
+static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
+{
+	UNUSED_PARAMETER(effect);
+	struct trackerzoomer_filter *f = data;
+	if (!f) {
+		return;
+	}
+
+	gs_effect_t *base = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+	if (!base) {
+		obs_source_skip_video_filter(f->context);
+		return;
+	}
+
+	if (!obs_source_process_filter_begin(f->context, GS_RGBA, 0)) {
+		obs_source_skip_video_filter(f->context);
+		return;
+	}
+
+	obs_source_process_filter_end(f->context, base, 0, 0);
+}
+
+#else
 static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *source)
 {
 	struct trackerzoomer_filter *f = bzalloc(sizeof(*f));
@@ -798,7 +861,6 @@ static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *sou
 	// (release) debug overlays removed
 
 	// detector setup (tag16h5)
-#if !defined(_WIN32)
 	f->tf = tag16h5_create();
 	f->td = apriltag_detector_create();
 	apriltag_detector_add_family_bits(f->td, f->tf, 1);
@@ -809,23 +871,11 @@ static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *sou
 	f->td->refine_edges = 1;
 	f->td->decode_sharpening = 0.25f;
 	f->td->qtp.deglitch = 0;
-#else
-	// Disabled on Windows while stabilizing plugin lifecycle.
-	f->tf = NULL;
-	f->td = NULL;
-#endif
 
 	// worker thread
-#if defined(_WIN32)
-	// Temporarily disable the apriltag worker on Windows while stabilizing the
-	// new render-crop architecture.
-	f->worker_event = NULL;
-	f->worker_running = false;
-#else
 	os_event_init(&f->worker_event, OS_EVENT_TYPE_AUTO);
 	f->worker_running = true;
 	pthread_create(&f->worker_thread, NULL, worker_main, f);
-#endif
 
 	obs_source_update(source, settings);
 	return f;
@@ -838,15 +888,12 @@ static void trackerzoomer_filter_destroy(void *data)
 		return;
 
 	// stop worker
-	if (f->worker_running) {
-		f->worker_running = false;
-		if (f->worker_event)
-			os_event_signal(f->worker_event);
-		pthread_join(f->worker_thread, NULL);
-		if (f->worker_event)
-			os_event_destroy(f->worker_event);
-		f->worker_event = NULL;
-	}
+	f->worker_running = false;
+	if (f->worker_event)
+		os_event_signal(f->worker_event);
+	pthread_join(f->worker_thread, NULL);
+	if (f->worker_event)
+		os_event_destroy(f->worker_event);
 
 	pthread_mutex_lock(&f->frame_mutex);
 	free_gray_frame(&f->pending);
@@ -867,6 +914,7 @@ static void trackerzoomer_filter_destroy(void *data)
 
 	bfree(f);
 }
+#endif
 
 static obs_properties_t *trackerzoomer_filter_properties(void *data)
 {
