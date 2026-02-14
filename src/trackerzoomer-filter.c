@@ -141,6 +141,7 @@ struct trackerzoomer_filter {
 	float apply_pos_x;
 	float apply_pos_y;
 	float apply_scale_val;
+	uint64_t suspend_ui_until_ns;
 
 	// (release) debug overlay fields removed
 
@@ -769,6 +770,7 @@ static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *sou
 	f->apply_pos_x = 0.0f;
 	f->apply_pos_y = 0.0f;
 	f->apply_scale_val = 1.0f;
+	f->suspend_ui_until_ns = 0;
 	// (release) debug overlays removed
 
 	// detector setup (tag16h5)
@@ -886,7 +888,12 @@ static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
 	if (!f)
 		return;
 
+	const bool prev_enable = f->enable_tracking;
 	f->enable_tracking = obs_data_get_bool(settings, "enable_tracking");
+	// Avoid deadlocking with OBS settings save: pause UI transform tasks briefly on any update.
+	// In particular, enable/disable tracking triggers an immediate save.
+	const uint64_t now_ns = os_gettime_ns();
+	f->suspend_ui_until_ns = now_ns + (prev_enable != f->enable_tracking ? 1000000000ULL : 200000000ULL);
 	f->tag_id_a = (int)obs_data_get_int(settings, "tag_id_a");
 	f->tag_id_b = (int)obs_data_get_int(settings, "tag_id_b");
 	f->padding = (float)obs_data_get_double(settings, "padding");
@@ -1444,6 +1451,11 @@ static void trackerzoomer_filter_tick(void *data, float seconds)
 	f->_last_apply_ns = now_ns;
 
 	if (!changed)
+		return;
+
+	// Avoid deadlocking with OBS source settings saves: do not queue UI tasks while
+	// we're within the post-update grace period.
+	if (now_ns < f->suspend_ui_until_ns)
 		return;
 
 	f->_transform_dirty = false;
