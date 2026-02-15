@@ -46,15 +46,93 @@ static const char *trackerzoomer_filter_get_name(void *unused)
 
 static void trackerzoomer_filter_defaults(obs_data_t *settings)
 {
-	// Keep settings stable for existing configs.
 	obs_data_set_default_bool(settings, "enable_tracking", false);
+	obs_data_set_default_int(settings, "tag_id_a", 0);
+	obs_data_set_default_int(settings, "tag_id_b", 1);
+	obs_data_set_default_double(settings, "padding", 0.0);
+	obs_data_set_default_double(settings, "min_decision_margin", 20.0);
+	obs_data_set_default_int(settings, "max_hamming", 0);
+
+	obs_data_set_default_int(settings, "downscale_mode", 0); // 0 external, 1 apriltag quad_decimate
+	obs_data_set_default_int(settings, "detect_width", 960);
+
+	// Apriltag tuning defaults (conservative)
+	obs_data_set_default_double(settings, "quad_decimate", 1.0);
+	obs_data_set_default_double(settings, "quad_sigma", 0.0);
+	obs_data_set_default_bool(settings, "refine_edges", true);
+	obs_data_set_default_double(settings, "decode_sharpening", 0.25);
+	obs_data_set_default_bool(settings, "deglitch", false);
+	obs_data_set_default_int(settings, "min_cluster_pixels", 5);
+	obs_data_set_default_int(settings, "max_nmaxima", 10);
+	obs_data_set_default_double(settings, "critical_rad", 0.0);
+	obs_data_set_default_double(settings, "max_line_fit_mse", 10.0);
+	obs_data_set_default_int(settings, "min_white_black_diff", 5);
+
+	obs_data_set_default_double(settings, "detect_fps", 30.0);
+
+	// Transform debugging / stabilization
+	obs_data_set_default_bool(settings, "freeze_transform", false);
+	obs_data_set_default_bool(settings, "apply_translation", true);
+	obs_data_set_default_bool(settings, "apply_scale", true);
+	obs_data_set_default_double(settings, "meas_alpha", 0.2);
+	obs_data_set_default_double(settings, "ease_tau", 0.5);
+	obs_data_set_default_bool(settings, "jump_guard", false);
+	obs_data_set_default_double(settings, "max_pos_jump_px", 150.0);
+	obs_data_set_default_double(settings, "max_scale_jump", 0.5);
+
+	// When enabled, clamps the scene-item translation so the scaled source still
+	// covers the canvas (no black bars revealed behind it).
+	obs_data_set_default_bool(settings, "clamp_to_canvas", true);
+	obs_data_set_default_double(settings, "clamp_margin_px", 0.0);
 }
 
 static obs_properties_t *trackerzoomer_filter_properties(void *data)
 {
 	UNUSED_PARAMETER(data);
 	obs_properties_t *props = obs_properties_create();
+
 	obs_properties_add_bool(props, "enable_tracking", "Enable AprilTag tracking");
+
+	obs_properties_add_int(props, "tag_id_a", "Tag ID A", 0, 1, 1);
+	obs_properties_add_int(props, "tag_id_b", "Tag ID B", 0, 1, 1);
+	obs_properties_add_float(props, "padding", "Padding (px)", 0.0, 500.0, 1.0);
+	obs_properties_add_float_slider(props, "min_decision_margin", "Min decision margin", 0.0, 100.0, 1.0);
+	obs_properties_add_int_slider(props, "max_hamming", "Max hamming", 0, 2, 1);
+
+	// Detection scaling mode (diagnostic)
+	obs_property_t *p_mode = obs_properties_add_list(props, "downscale_mode", "Detection scaling mode",
+							 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(p_mode, "External downscale (detect_width)", 0);
+	obs_property_list_add_int(p_mode, "Apriltag quad_decimate (feed full-res)", 1);
+	obs_properties_add_int_slider(props, "detect_width", "External detect width (px)", 160, 3840, 16);
+
+	// Apriltag detector tuning
+	obs_properties_add_float_slider(props, "quad_decimate", "quad_decimate", 1.0, 6.0, 0.1);
+	obs_properties_add_float_slider(props, "quad_sigma", "quad_sigma", 0.0, 2.0, 0.05);
+	obs_properties_add_bool(props, "refine_edges", "refine_edges");
+	obs_properties_add_float_slider(props, "decode_sharpening", "decode_sharpening", 0.0, 1.0, 0.05);
+	obs_properties_add_bool(props, "deglitch", "qtp.deglitch");
+	obs_properties_add_int_slider(props, "min_cluster_pixels", "qtp.min_cluster_pixels", 0, 1000, 1);
+	obs_properties_add_int_slider(props, "max_nmaxima", "qtp.max_nmaxima", 1, 100, 1);
+	obs_properties_add_float_slider(props, "critical_rad", "qtp.critical_rad (rad)", 0.0, 3.14159, 0.01);
+	obs_properties_add_float_slider(props, "max_line_fit_mse", "qtp.max_line_fit_mse", 0.0, 100.0, 0.5);
+	obs_properties_add_int_slider(props, "min_white_black_diff", "qtp.min_white_black_diff", 0, 255, 1);
+
+	obs_properties_add_float_slider(props, "detect_fps", "Detection FPS", 1.0, 60.0, 1.0);
+
+	// Transform debugging / stabilization
+	obs_properties_add_bool(props, "freeze_transform", "Freeze transform (still detect, don't apply)");
+	obs_properties_add_bool(props, "apply_translation", "Apply translation");
+	obs_properties_add_bool(props, "apply_scale", "Apply scale");
+	obs_properties_add_float_slider(props, "meas_alpha", "ROI measurement smoothing (alpha)", 0.0, 1.0, 0.01);
+	obs_properties_add_float_slider(props, "ease_tau", "Transform easing tau (s)", 0.01, 2.0, 0.01);
+	obs_properties_add_bool(props, "jump_guard", "Jump guard (clamp per-step changes)");
+	obs_properties_add_float_slider(props, "max_pos_jump_px", "Max pos jump per step (px)", 0.0, 2000.0, 5.0);
+	obs_properties_add_float_slider(props, "max_scale_jump", "Max scale jump per step", 0.0, 5.0, 0.01);
+
+	obs_properties_add_bool(props, "clamp_to_canvas", "Clamp to canvas (avoid black borders)");
+	obs_properties_add_float_slider(props, "clamp_margin_px", "Clamp margin (px)", 0.0, 200.0, 1.0);
+
 	return props;
 }
 
