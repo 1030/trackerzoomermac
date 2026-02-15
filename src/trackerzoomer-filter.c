@@ -163,7 +163,11 @@ struct trackerzoomer_filter {
 	// detector thread + shared frame buffer
 	pthread_t worker_thread;
 	bool worker_running;
+#if defined(_WIN32)
+	HANDLE worker_event;
+#else
 	os_event_t *worker_event;
+#endif
 	pthread_mutex_t frame_mutex;
 	pthread_mutex_t td_mutex;
 	struct gray_frame pending;
@@ -640,10 +644,16 @@ static void update_auto_roi(struct trackerzoomer_filter *f, float minx, float mi
 static void *worker_main(void *param)
 {
 	struct trackerzoomer_filter *f = param;
+#if !defined(_WIN32)
 	os_set_thread_name("trackerzoomer-apriltag");
+#endif
 
 	while (f->worker_running) {
+#if defined(_WIN32)
+		WaitForSingleObject(f->worker_event, INFINITE);
+#else
 		os_event_wait(f->worker_event);
+#endif
 		if (!f->worker_running)
 			break;
 
@@ -833,7 +843,11 @@ static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *sou
 	f->td->qtp.deglitch = 0;
 
 	// worker thread
+#if defined(_WIN32)
+	f->worker_event = CreateEventW(NULL, FALSE, FALSE, NULL); // auto-reset
+#else
 	os_event_init(&f->worker_event, OS_EVENT_TYPE_AUTO);
+#endif
 	f->worker_running = true;
 	pthread_create(&f->worker_thread, NULL, worker_main, f);
 
@@ -849,11 +863,21 @@ static void trackerzoomer_filter_destroy(void *data)
 
 	// stop worker
 	f->worker_running = false;
+#if defined(_WIN32)
+	if (f->worker_event)
+		SetEvent(f->worker_event);
+#else
 	if (f->worker_event)
 		os_event_signal(f->worker_event);
+#endif
 	pthread_join(f->worker_thread, NULL);
+#if defined(_WIN32)
+	if (f->worker_event)
+		CloseHandle(f->worker_event);
+#else
 	if (f->worker_event)
 		os_event_destroy(f->worker_event);
+#endif
 
 	pthread_mutex_lock(&f->frame_mutex);
 	free_gray_frame(&f->pending);
