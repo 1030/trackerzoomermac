@@ -1,59 +1,78 @@
-# OBS Plugin Template
+# TrackerZoom Filter (OBS Plugin)
 
-## Introduction
+AprilTag-driven axis-aligned zoom **as an OBS video filter**.
 
-The plugin template is meant to be used as a starting point for OBS Studio plugin development. It includes:
+TrackerZoom uses **two AprilTags** (family `tag16h5`, IDs `0` and `1` by default) placed on a tabletop. The filter crops and scales the source so your camera centers on the midpoint between tags and zooms so the tags sit just out of shot.
 
-* Boilerplate plugin source code
-* A CMake project file
-* GitHub Actions workflows and repository actions
+- **No perspective correction** (no deskew): the crop is axis-aligned to your OBS canvas/output aspect.
+- Designed to be stable: when tracking is **off**, the filter is a simple passthrough.
 
-## Supported Build Environments
+## Install
 
-| Platform  | Tool   |
-|-----------|--------|
-| Windows   | Visual Studio 17 2022 |
-| macOS     | XCode 16.0 |
-| Windows, macOS  | CMake 3.30.5 |
-| Ubuntu 24.04 | CMake 3.28.3 |
-| Ubuntu 24.04 | `ninja-build` |
-| Ubuntu 24.04 | `pkg-config`
-| Ubuntu 24.04 | `build-essential` |
+### Windows (portable OBS or standard install)
 
-## Quick Start
+Download the latest **Windows x64** build from GitHub Actions artifacts or Releases.
 
-An absolute bare-bones [Quick Start Guide](https://github.com/obsproject/obs-plugintemplate/wiki/Quick-Start-Guide) is available in the wiki.
+Copy files into your OBS folder:
 
-## Documentation
+- `obs-plugins/64bit/trackerzoomer-filter.dll`
+- `data/obs-plugins/trackerzoomer-filter/effects/trackerzoomer.effect`
+- `data/obs-plugins/trackerzoomer-filter/locale/en-US.ini`
 
-All documentation can be found in the [Plugin Template Wiki](https://github.com/obsproject/obs-plugintemplate/wiki).
+For **portable OBS**, those paths are relative to the portable OBS directory.
 
-Suggested reading to get up and running:
+### macOS
 
-* [Getting started](https://github.com/obsproject/obs-plugintemplate/wiki/Getting-Started)
-* [Build system requirements](https://github.com/obsproject/obs-plugintemplate/wiki/Build-System-Requirements)
-* [Build system options](https://github.com/obsproject/obs-plugintemplate/wiki/CMake-Build-System-Options)
+Download the `.pkg` from GitHub Actions artifacts or Releases and run it.
 
-## GitHub Actions & CI
+### Linux (Ubuntu)
 
-Default GitHub Actions workflows are available for the following repository actions:
+Download the `.deb` from GitHub Actions artifacts or Releases and install it.
 
-* `push`: Run for commits or tags pushed to `master` or `main` branches.
-* `pr-pull`: Run when a Pull Request has been pushed or synchronized.
-* `dispatch`: Run when triggered by the workflow dispatch in GitHub's user interface.
-* `build-project`: Builds the actual project and is triggered by other workflows.
-* `check-format`: Checks CMake and plugin source code formatting and is triggered by other workflows.
+## Use
 
-The workflows make use of GitHub repository actions (contained in `.github/actions`) and build scripts (contained in `.github/scripts`) which are not needed for local development, but might need to be adjusted if additional/different steps are required to build the plugin.
+1. In OBS, select your source (e.g. a webcam).
+2. Add a filter: **Filters → Effect Filters → + → TrackerZoom Filter**.
+3. Print or display two tags (see **Tag setup** below).
+4. In the filter properties:
+   - Enable **AprilTag tracking**
+   - Set **Tag ID A** / **Tag ID B** (defaults are `0` and `1`)
 
-### Retrieving build artifacts
+## Tag setup
 
-Successful builds on GitHub Actions will produce build artifacts that can be downloaded for testing. These artifacts are commonly simple archives and will not contain package installers or installation programs.
+- Family: `tag16h5`
+- IDs: `0` and `1` (defaults)
+- Place anywhere on the tabletop; rotate as you like.
+- The crop is axis-aligned to your output aspect; no deskew is performed.
 
-### Building a Release
+## Settings (quick guide)
 
-To create a release, an appropriately named tag needs to be pushed to the `main`/`master` branch using semantic versioning (e.g., `12.3.4`, `23.4.5-beta2`). A draft release will be created on the associated repository with generated installer packages or installation programs attached as release artifacts.
+- **Padding (px)**: Insets the crop (per side) so the tags are pushed further out of shot.
+- **Min decision margin**: Confidence threshold. Increase to reduce false detections; decrease if detection is missing.
+- **Max hamming**: Error correction tolerance. `0` is strict; `1`/`2` can help with noisy images.
+- **Detection width (px)**: Internal downscale width for detection. Lower = faster; higher = more reliable detection.
+- **Detection FPS**: How often detection runs.
+- **quad_sigma / refine_edges / decode_sharpening**: AprilTag detector tuning knobs.
+- **ROI smoothing (alpha)**: Smooths the measured ROI. Higher = more responsive; lower = smoother.
 
-## Signing and Notarizing on macOS
+## Troubleshooting
 
-Basic concepts of codesigning and notarization on macOS are explained in the correspodning [Wiki article](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS) which has a specific section for the [GitHub Actions setup](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS#setting-up-code-signing-for-github-actions).
+- Ensure tags are large enough in frame, sharp, and well-lit.
+- If detection is flaky:
+  - increase **Detection width**
+  - lower **Min decision margin** slightly
+  - increase lighting / reduce motion blur
+
+## Build from source
+
+This repo uses CMake and vendors AprilTag in `third_party/apriltag`.
+
+CI builds for Windows/macOS/Linux via GitHub Actions.
+
+## License
+
+See `LICENSE`.
+
+---
+
+Inspired by the TrackerZoom/TrackerZoomOBS projects.
