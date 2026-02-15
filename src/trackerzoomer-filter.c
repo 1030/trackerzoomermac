@@ -155,6 +155,8 @@ static obs_properties_t *trackerzoomer_filter_properties(void *data)
 	return props;
 }
 
+static void trackerzoomer_filter_update(void *data, obs_data_t *settings);
+
 static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *source)
 {
 	struct trackerzoomer_filter *f = bzalloc(sizeof(*f));
