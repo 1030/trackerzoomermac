@@ -55,52 +55,23 @@ struct trackerzoomer_filter {
 	// AprilTag settings
 	bool enable_tracking;
 
-	// Manual ROI override (fractional UV-style controls)
-	bool manual_roi_enable;
-	float manual_roi_center_x;
-	float manual_roi_center_y;
-	float manual_roi_width;
-	float manual_roi_height;
-
 	int tag_id_a;
 	int tag_id_b;
 	float padding;
 	float min_decision_margin; // visual confidence threshold
 	int max_hamming;
 
-	// Detection image scaling / apriltag internal decimation
-	// 0 = external downscale to detect_width; 1 = feed full-res + use td->quad_decimate
-	int downscale_mode;
 	int detect_width;
 
 	// Apriltag detector tuning
-	float quad_decimate;
 	float quad_sigma;
 	bool refine_edges;
 	float decode_sharpening;
-	bool deglitch;
-	int min_cluster_pixels;
-	int max_nmaxima;
-	float critical_rad; // radians
-	float max_line_fit_mse;
-	int min_white_black_diff;
 
 	// Detection pacing
 	float detect_fps;
 
-	// Transform jump guards / smoothing
-	bool freeze_transform;
-	bool apply_translation;
-	bool apply_scale;
 	float meas_alpha; // 0..1 measurement smoothing for ROI
-	float ease_tau;   // seconds, transform easing time constant
-	bool jump_guard;
-	float max_pos_jump_px; // max change in *target* pos per apply step
-	float max_scale_jump;  // max change in *target* scale per apply step
-
-	// canvas clamp (prevents black borders when tracking near frame edges)
-	bool clamp_to_canvas;
-	float clamp_margin_px;
 
 	// (release) manual/ROI debug transforms removed
 
@@ -138,27 +109,11 @@ struct trackerzoomer_filter {
 
 	// video frame counting
 	uint64_t _video_frame_seq;
-	uint64_t _last_log_ns;
-	int _last_frame_format;
 	int _last_frame_w;
 	int _last_frame_h;
-	uint64_t _last_dump_ns;
-	int _dump_count;
 
-	// analysis frame grab pacing (tick thread)
+	// analysis frame grab pacing
 	uint64_t _last_grab_ns;
-
-	// render-path forensics
-	uint64_t _last_render_log_ns;
-	int _last_render_parent_w;
-	int _last_render_parent_h;
-
-	// detection stats (worker thread)
-	uint64_t _last_detect_ns;
-	uint64_t _last_detect_trigger_ns;
-	int _last_detect_count;
-	bool _last_found_a;
-	bool _last_found_b;
 
 	// detector thread + shared frame buffer
 	pthread_t worker_thread;
@@ -175,9 +130,6 @@ struct trackerzoomer_filter {
 
 	// UI/apply thread safety for transforms
 	pthread_mutex_t xform_mutex;
-	float apply_pos_x;
-	float apply_pos_y;
-	float apply_scale_val;
 	uint64_t suspend_ui_until_ns;
 	float render_mul_x;
 	float render_mul_y;
@@ -199,11 +151,6 @@ static const char *trackerzoomer_filter_get_name(void *unused)
 static void trackerzoomer_filter_defaults(obs_data_t *settings)
 {
 	obs_data_set_default_bool(settings, "enable_tracking", false);
-	obs_data_set_default_bool(settings, "manual_roi_enable", false);
-	obs_data_set_default_double(settings, "manual_roi_center_x", 0.5);
-	obs_data_set_default_double(settings, "manual_roi_center_y", 0.5);
-	obs_data_set_default_double(settings, "manual_roi_width", 1.0);
-	obs_data_set_default_double(settings, "manual_roi_height", 1.0);
 
 	obs_data_set_default_int(settings, "tag_id_a", 0);
 	obs_data_set_default_int(settings, "tag_id_b", 1);
@@ -211,42 +158,17 @@ static void trackerzoomer_filter_defaults(obs_data_t *settings)
 	obs_data_set_default_double(settings, "min_decision_margin", 20.0);
 	obs_data_set_default_int(settings, "max_hamming", 0);
 
-	obs_data_set_default_int(settings, "downscale_mode", 0); // 0 external, 1 apriltag quad_decimate
+	// Detection (external downscale)
 	obs_data_set_default_int(settings, "detect_width", 960);
+	obs_data_set_default_double(settings, "detect_fps", 30.0);
 
-	// Apriltag tuning defaults (conservative)
-	obs_data_set_default_double(settings, "quad_decimate", 1.0);
+	// AprilTag detector tuning (minimal)
 	obs_data_set_default_double(settings, "quad_sigma", 0.0);
 	obs_data_set_default_bool(settings, "refine_edges", true);
 	obs_data_set_default_double(settings, "decode_sharpening", 0.25);
-	obs_data_set_default_bool(settings, "deglitch", false);
-	obs_data_set_default_int(settings, "min_cluster_pixels", 5);
-	obs_data_set_default_int(settings, "max_nmaxima", 10);
-	obs_data_set_default_double(settings, "critical_rad", 0.0);
-	obs_data_set_default_double(settings, "max_line_fit_mse", 10.0);
-	obs_data_set_default_int(settings, "min_white_black_diff", 5);
 
-	obs_data_set_default_double(settings, "detect_fps", 30.0);
-
-	// Transform debugging / stabilization
-	obs_data_set_default_bool(settings, "freeze_transform", false);
-	obs_data_set_default_bool(settings, "apply_translation", true);
-	obs_data_set_default_bool(settings, "apply_scale", true);
+	// ROI smoothing
 	obs_data_set_default_double(settings, "meas_alpha", 0.2);
-	obs_data_set_default_double(settings, "ease_tau", 0.5);
-	obs_data_set_default_bool(settings, "jump_guard", false);
-	obs_data_set_default_double(settings, "max_pos_jump_px", 150.0);
-	obs_data_set_default_double(settings, "max_scale_jump", 0.5);
-
-	// Debug overlay (ROI preview)
-	// (release) debug overlay defaults removed
-
-	// When enabled, clamps the scene-item translation so the scaled source still
-	// covers the canvas (no black bars revealed behind it).
-	obs_data_set_default_bool(settings, "clamp_to_canvas", true);
-	obs_data_set_default_double(settings, "clamp_margin_px", 0.0);
-
-	// (release) manual/ROI debug transform defaults removed
 }
 
 static void free_gray_frame(struct gray_frame *g)
@@ -398,19 +320,6 @@ static void bgrx_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_s
 			dst_row[x] = rgb_to_luma_u8(r, g, b);
 		}
 	}
-}
-
-static void dump_pgm_u8(const char *path, const uint8_t *buf, int w, int h, int stride)
-{
-	if (!path || !buf || w <= 0 || h <= 0 || stride < w)
-		return;
-	FILE *fp = fopen(path, "wb");
-	if (!fp)
-		return;
-	fprintf(fp, "P5\n%d %d\n255\n", w, h);
-	for (int y = 0; y < h; y++)
-		fwrite(buf + y * stride, 1, (size_t)w, fp);
-	fclose(fp);
 }
 
 static void uyvy_to_gray_downscale(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w,
@@ -784,13 +693,6 @@ static void *worker_main(void *param)
 		}
 		// else: exactly one tag -> do nothing (hold last ROI/transform)
 
-		pthread_mutex_lock(&f->frame_mutex);
-		f->_last_detect_ns = os_gettime_ns();
-		f->_last_detect_count = det_count;
-		f->_last_found_a = (da != NULL);
-		f->_last_found_b = (db != NULL);
-		pthread_mutex_unlock(&f->frame_mutex);
-
 		apriltag_detections_destroy(detections);
 	}
 
@@ -820,9 +722,6 @@ static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *sou
 	pthread_mutex_init_value(&f->frame_mutex);
 	pthread_mutex_init_value(&f->td_mutex);
 	pthread_mutex_init_value(&f->xform_mutex);
-	f->apply_pos_x = 0.0f;
-	f->apply_pos_y = 0.0f;
-	f->apply_scale_val = 1.0f;
 	f->suspend_ui_until_ns = 0;
 	f->render_mul_x = 1.0f;
 	f->render_mul_y = 1.0f;
@@ -906,57 +805,20 @@ static obs_properties_t *trackerzoomer_filter_properties(void *data)
 
 	obs_properties_add_bool(props, "enable_tracking", "Enable AprilTag tracking");
 
-	obs_properties_t *mroi = obs_properties_create();
-	obs_properties_add_group(props, "manual_roi_group", "Manual ROI", OBS_GROUP_NORMAL, mroi);
-	obs_properties_add_bool(mroi, "manual_roi_enable", "Enable manual ROI override");
-	obs_properties_add_float_slider(mroi, "manual_roi_center_x", "Center X", 0.0, 1.0, 0.01);
-	obs_properties_add_float_slider(mroi, "manual_roi_center_y", "Center Y", 0.0, 1.0, 0.01);
-	obs_properties_add_float_slider(mroi, "manual_roi_width", "Width (fraction)", 0.05, 1.0, 0.01);
-	obs_properties_add_float_slider(mroi, "manual_roi_height", "Height (fraction)", 0.05, 1.0, 0.01);
-
 	obs_properties_add_int(props, "tag_id_a", "Tag ID A", 0, 1, 1);
 	obs_properties_add_int(props, "tag_id_b", "Tag ID B", 0, 1, 1);
 	obs_properties_add_float(props, "padding", "Padding (px)", 0.0, 500.0, 1.0);
 	obs_properties_add_float_slider(props, "min_decision_margin", "Min decision margin", 0.0, 100.0, 1.0);
 	obs_properties_add_int_slider(props, "max_hamming", "Max hamming", 0, 2, 1);
 
-	// Detection scaling mode (diagnostic)
-	obs_property_t *p_mode = obs_properties_add_list(props, "downscale_mode", "Detection scaling mode",
-							 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-	obs_property_list_add_int(p_mode, "External downscale (detect_width)", 0);
-	obs_property_list_add_int(p_mode, "Apriltag quad_decimate (feed full-res)", 1);
-	obs_properties_add_int_slider(props, "detect_width", "External detect width (px)", 160, 3840, 16);
+	obs_properties_add_int_slider(props, "detect_width", "Detection width (px)", 160, 3840, 16);
+	obs_properties_add_float_slider(props, "detect_fps", "Detection FPS", 1.0, 60.0, 1.0);
 
-	// Apriltag detector tuning
-	obs_properties_add_float_slider(props, "quad_decimate", "quad_decimate", 1.0, 6.0, 0.1);
 	obs_properties_add_float_slider(props, "quad_sigma", "quad_sigma", 0.0, 2.0, 0.05);
 	obs_properties_add_bool(props, "refine_edges", "refine_edges");
 	obs_properties_add_float_slider(props, "decode_sharpening", "decode_sharpening", 0.0, 1.0, 0.05);
-	obs_properties_add_bool(props, "deglitch", "qtp.deglitch");
-	obs_properties_add_int_slider(props, "min_cluster_pixels", "qtp.min_cluster_pixels", 0, 1000, 1);
-	obs_properties_add_int_slider(props, "max_nmaxima", "qtp.max_nmaxima", 1, 100, 1);
-	obs_properties_add_float_slider(props, "critical_rad", "qtp.critical_rad (rad)", 0.0, 3.14159, 0.01);
-	obs_properties_add_float_slider(props, "max_line_fit_mse", "qtp.max_line_fit_mse", 0.0, 100.0, 0.5);
-	obs_properties_add_int_slider(props, "min_white_black_diff", "qtp.min_white_black_diff", 0, 255, 1);
 
-	obs_properties_add_float_slider(props, "detect_fps", "Detection FPS", 1.0, 60.0, 1.0);
-
-	// (release) analysis frame source fixed to filter_video callback
-
-	// Transform debugging / stabilization
-	obs_properties_add_bool(props, "freeze_transform", "Freeze transform (still detect, don't apply)");
-	obs_properties_add_bool(props, "apply_translation", "Apply translation");
-	obs_properties_add_bool(props, "apply_scale", "Apply scale");
-	obs_properties_add_float_slider(props, "meas_alpha", "ROI measurement smoothing (alpha)", 0.0, 1.0, 0.01);
-	obs_properties_add_float_slider(props, "ease_tau", "Transform easing tau (s)", 0.01, 2.0, 0.01);
-	obs_properties_add_bool(props, "jump_guard", "Jump guard (clamp per-step changes)");
-	obs_properties_add_float_slider(props, "max_pos_jump_px", "Max pos jump per step (px)", 0.0, 2000.0, 5.0);
-	obs_properties_add_float_slider(props, "max_scale_jump", "Max scale jump per step", 0.0, 5.0, 0.01);
-
-	// Release build: no debug overlays
-
-	obs_properties_add_bool(props, "clamp_to_canvas", "Clamp to canvas (avoid black borders)");
-	obs_properties_add_float_slider(props, "clamp_margin_px", "Clamp margin (px)", 0.0, 200.0, 1.0);
+	obs_properties_add_float_slider(props, "meas_alpha", "ROI smoothing (alpha)", 0.0, 1.0, 0.01);
 
 	return props;
 }
@@ -969,124 +831,58 @@ static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
 
 	const bool prev_enable = f->enable_tracking;
 	f->enable_tracking = obs_data_get_bool(settings, "enable_tracking");
-	f->manual_roi_enable = obs_data_get_bool(settings, "manual_roi_enable");
-	f->manual_roi_center_x = (float)obs_data_get_double(settings, "manual_roi_center_x");
-	f->manual_roi_center_y = (float)obs_data_get_double(settings, "manual_roi_center_y");
-	f->manual_roi_width = (float)obs_data_get_double(settings, "manual_roi_width");
-	f->manual_roi_height = (float)obs_data_get_double(settings, "manual_roi_height");
+
 	// Avoid deadlocking with OBS settings save: pause UI transform tasks briefly on any update.
 	// In particular, enable/disable tracking triggers an immediate save.
 	const uint64_t now_ns = os_gettime_ns();
 	f->suspend_ui_until_ns = now_ns + (prev_enable != f->enable_tracking ? 1000000000ULL : 200000000ULL);
+
 	f->tag_id_a = (int)obs_data_get_int(settings, "tag_id_a");
 	f->tag_id_b = (int)obs_data_get_int(settings, "tag_id_b");
+
 	f->padding = (float)obs_data_get_double(settings, "padding");
+	if (f->padding < 0.0f)
+		f->padding = 0.0f;
+
 	f->min_decision_margin = (float)obs_data_get_double(settings, "min_decision_margin");
 	if (f->min_decision_margin < 0.0f)
 		f->min_decision_margin = 0.0f;
+
 	f->max_hamming = (int)obs_data_get_int(settings, "max_hamming");
 	if (f->max_hamming < 0)
 		f->max_hamming = 0;
 	if (f->max_hamming > 2)
 		f->max_hamming = 2;
 
-	f->downscale_mode = (int)obs_data_get_int(settings, "downscale_mode");
 	f->detect_width = (int)obs_data_get_int(settings, "detect_width");
 	if (f->detect_width < 160)
 		f->detect_width = 160;
 	if (f->detect_width > 3840)
 		f->detect_width = 3840;
 
-	f->quad_decimate = (float)obs_data_get_double(settings, "quad_decimate");
-	f->quad_sigma = (float)obs_data_get_double(settings, "quad_sigma");
-	f->refine_edges = obs_data_get_bool(settings, "refine_edges");
-	f->decode_sharpening = (float)obs_data_get_double(settings, "decode_sharpening");
-	f->deglitch = obs_data_get_bool(settings, "deglitch");
-	f->min_cluster_pixels = (int)obs_data_get_int(settings, "min_cluster_pixels");
-	f->max_nmaxima = (int)obs_data_get_int(settings, "max_nmaxima");
-	f->critical_rad = (float)obs_data_get_double(settings, "critical_rad");
-	f->max_line_fit_mse = (float)obs_data_get_double(settings, "max_line_fit_mse");
-	f->min_white_black_diff = (int)obs_data_get_int(settings, "min_white_black_diff");
-
-	// (release) detect_every_n_frames removed
 	f->detect_fps = (float)obs_data_get_double(settings, "detect_fps");
 	if (f->detect_fps < 1.0f)
 		f->detect_fps = 1.0f;
 
-	// analysis_method removed
+	f->quad_sigma = (float)obs_data_get_double(settings, "quad_sigma");
+	f->refine_edges = obs_data_get_bool(settings, "refine_edges");
+	f->decode_sharpening = (float)obs_data_get_double(settings, "decode_sharpening");
 
-	f->freeze_transform = obs_data_get_bool(settings, "freeze_transform");
-	f->apply_translation = obs_data_get_bool(settings, "apply_translation");
-	f->apply_scale = obs_data_get_bool(settings, "apply_scale");
 	f->meas_alpha = (float)obs_data_get_double(settings, "meas_alpha");
 	if (f->meas_alpha < 0.0f)
 		f->meas_alpha = 0.0f;
 	if (f->meas_alpha > 1.0f)
 		f->meas_alpha = 1.0f;
-	f->ease_tau = (float)obs_data_get_double(settings, "ease_tau");
-	if (f->ease_tau < 0.001f)
-		f->ease_tau = 0.001f;
-	f->jump_guard = obs_data_get_bool(settings, "jump_guard");
-	f->max_pos_jump_px = (float)obs_data_get_double(settings, "max_pos_jump_px");
-	if (f->max_pos_jump_px < 0.0f)
-		f->max_pos_jump_px = 0.0f;
-	f->max_scale_jump = (float)obs_data_get_double(settings, "max_scale_jump");
-	if (f->max_scale_jump < 0.0f)
-		f->max_scale_jump = 0.0f;
 
-	// (release) debug overlay settings removed
-
-	// Apply detector params (worker thread also uses td). IMPORTANT: avoid blocking the UI thread
-	// if the worker is currently inside apriltag_detector_detect().
-#if defined(_WIN32)
+	// Apply detector params (worker thread also uses td).
 	pthread_mutex_lock(&f->td_mutex);
 	if (f->td) {
-		// If we're doing our own external downscale, disable apriltag internal decimation.
-		f->td->quad_decimate = (f->downscale_mode == 0) ? 1.0f : clampf(f->quad_decimate, 1.0f, 6.0f);
+		f->td->quad_decimate = 1.0f; // we external-downscale via detect_width
 		f->td->quad_sigma = clampf(f->quad_sigma, 0.0f, 2.0f);
 		f->td->refine_edges = f->refine_edges ? 1 : 0;
 		f->td->decode_sharpening = clampf(f->decode_sharpening, 0.0f, 1.0f);
-		f->td->qtp.deglitch = f->deglitch ? 1 : 0;
-		f->td->qtp.min_cluster_pixels = f->min_cluster_pixels;
-		f->td->qtp.max_nmaxima = f->max_nmaxima;
-		f->td->qtp.critical_rad = f->critical_rad;
-		f->td->qtp.cos_critical_rad = cosf(f->critical_rad);
-		f->td->qtp.max_line_fit_mse = f->max_line_fit_mse;
-		f->td->qtp.min_white_black_diff = f->min_white_black_diff;
 	}
 	pthread_mutex_unlock(&f->td_mutex);
-#else
-	if (pthread_mutex_trylock(&f->td_mutex) == 0) {
-		if (f->td) {
-			// If we're doing our own external downscale, disable apriltag internal decimation.
-			f->td->quad_decimate = (f->downscale_mode == 0) ? 1.0f : clampf(f->quad_decimate, 1.0f, 6.0f);
-			f->td->quad_sigma = clampf(f->quad_sigma, 0.0f, 2.0f);
-			f->td->refine_edges = f->refine_edges ? 1 : 0;
-			f->td->decode_sharpening = clampf(f->decode_sharpening, 0.0f, 1.0f);
-			f->td->qtp.deglitch = f->deglitch ? 1 : 0;
-			f->td->qtp.min_cluster_pixels = f->min_cluster_pixels;
-			f->td->qtp.max_nmaxima = f->max_nmaxima;
-			f->td->qtp.critical_rad = f->critical_rad;
-			f->td->qtp.cos_critical_rad = cosf(f->critical_rad);
-			f->td->qtp.max_line_fit_mse = f->max_line_fit_mse;
-			f->td->qtp.min_white_black_diff = f->min_white_black_diff;
-		}
-		pthread_mutex_unlock(&f->td_mutex);
-	} else {
-		blog(LOG_DEBUG, "[trackerzoomer-filter] detector busy; skipping td param update");
-	}
-#endif
-
-	// easing tau was hardcoded; now exposed.
-
-	f->clamp_to_canvas = obs_data_get_bool(settings, "clamp_to_canvas");
-	f->clamp_margin_px = (float)obs_data_get_double(settings, "clamp_margin_px");
-	if (f->clamp_margin_px < 0.0f)
-		f->clamp_margin_px = 0.0f;
-
-	// (release) manual/ROI debug transforms removed
-
-	f->_transform_dirty = true;
 }
 
 static void feed_pending_from_frame(struct trackerzoomer_filter *f, struct obs_source_frame *frame)
@@ -1106,19 +902,14 @@ static void feed_pending_from_frame(struct trackerzoomer_filter *f, struct obs_s
 	if (src_w <= 0 || src_h <= 0)
 		return;
 
-	int dst_w = src_w;
-	int dst_h = src_h;
-	if (f->downscale_mode == 0) {
-		// External downscale to a fixed working width for detection.
-		dst_w = f->detect_width;
-		if (dst_w < 1)
-			dst_w = 1;
-		if (src_w < dst_w)
-			dst_w = src_w;
-		dst_h = (int)((int64_t)dst_w * src_h / src_w);
-		if (dst_h < 1)
-			dst_h = 1;
-	}
+	int dst_w = f->detect_width;
+	if (dst_w < 1)
+		dst_w = 1;
+	if (src_w < dst_w)
+		dst_w = src_w;
+	int dst_h = (int)((int64_t)dst_w * src_h / src_w);
+	if (dst_h < 1)
+		dst_h = 1;
 
 	pthread_mutex_lock(&f->frame_mutex);
 	ensure_gray_frame(&f->pending, dst_w, dst_h);
@@ -1202,19 +993,6 @@ static void feed_pending_from_frame(struct trackerzoomer_filter *f, struct obs_s
 		// Unsupported format for now
 	}
 
-	// Debug: dump the downscaled grayscale image occasionally so we can verify
-	// the tag is actually visible after format conversion.
-	const uint64_t dump_now = os_gettime_ns();
-	if ((!f->_last_dump_ns || (dump_now - f->_last_dump_ns) > 2000000000ULL) && f->_dump_count < 3) {
-		dump_pgm_u8("/Users/hal9000/clawd/trackerzoomer-debug.pgm", f->pending.data, f->pending.width,
-			    f->pending.height, f->pending.stride);
-		blog(LOG_INFO,
-		     "[trackerzoomer-filter] wrote debug frame: /Users/hal9000/clawd/trackerzoomer-debug.pgm (%dx%d)",
-		     f->pending.width, f->pending.height);
-		f->_last_dump_ns = dump_now;
-		f->_dump_count++;
-	}
-
 	pthread_mutex_unlock(&f->frame_mutex);
 }
 
@@ -1224,33 +1002,6 @@ static void trackerzoomer_filter_tick(void *data, float seconds)
 	struct trackerzoomer_filter *f = data;
 	if (!f)
 		return;
-
-	// Manual ROI override: always takes precedence.
-	if (f->manual_roi_enable) {
-		float cx = f->manual_roi_center_x;
-		float cy = f->manual_roi_center_y;
-		float w = f->manual_roi_width;
-		float h = f->manual_roi_height;
-		if (w < 0.05f)
-			w = 0.05f;
-		if (h < 0.05f)
-			h = 0.05f;
-		if (w > 1.0f)
-			w = 1.0f;
-		if (h > 1.0f)
-			h = 1.0f;
-		const float mul_x = w;
-		const float mul_y = h;
-		const float add_x = cx - mul_x * 0.5f;
-		const float add_y = cy - mul_y * 0.5f;
-		pthread_mutex_lock(&f->xform_mutex);
-		f->render_mul_x = mul_x;
-		f->render_mul_y = mul_y;
-		f->render_add_x = add_x;
-		f->render_add_y = add_y;
-		pthread_mutex_unlock(&f->xform_mutex);
-		return;
-	}
 
 	// When tracking is off, render full frame.
 	if (!f->enable_tracking) {
@@ -1429,68 +1180,7 @@ static struct obs_source_info trackerzoomer_filter_info = {
 	.video_render = trackerzoomer_filter_video_render,
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Minimal passthrough filter for isolating render pipeline issues.
-// This does NO apriltag work, NO worker thread, and NO scene-item transforms.
-// If glitches persist with this filter enabled, the issue is likely unrelated
-// to AprilTag detection / ROI math.
-
-struct trackerzoomer_passthrough {
-	obs_source_t *context;
-};
-
-static const char *trackerzoomer_passthrough_get_name(void *unused)
-{
-	UNUSED_PARAMETER(unused);
-	return "TrackerZoom Passthrough";
-}
-
-static void *trackerzoomer_passthrough_create(obs_data_t *settings, obs_source_t *source)
-{
-	UNUSED_PARAMETER(settings);
-	struct trackerzoomer_passthrough *p = bzalloc(sizeof(*p));
-	p->context = source;
-	return p;
-}
-
-static void trackerzoomer_passthrough_destroy(void *data)
-{
-	struct trackerzoomer_passthrough *p = data;
-	bfree(p);
-}
-
-static void trackerzoomer_passthrough_video_render(void *data, gs_effect_t *effect)
-{
-	UNUSED_PARAMETER(effect);
-	struct trackerzoomer_passthrough *p = data;
-	if (!p)
-		return;
-
-	gs_effect_t *base = obs_get_base_effect(OBS_EFFECT_DEFAULT);
-	if (!base) {
-		obs_source_skip_video_filter(p->context);
-		return;
-	}
-
-	if (obs_source_process_filter_begin(p->context, GS_RGBA, 0)) {
-		obs_source_process_filter_end(p->context, base, 0, 0);
-	} else {
-		obs_source_skip_video_filter(p->context);
-	}
-}
-
-static struct obs_source_info trackerzoomer_passthrough_info = {
-	.id = "trackerzoomer_passthrough_filter",
-	.type = OBS_SOURCE_TYPE_FILTER,
-	.output_flags = 0, // use GPU render path only
-	.get_name = trackerzoomer_passthrough_get_name,
-	.create = trackerzoomer_passthrough_create,
-	.destroy = trackerzoomer_passthrough_destroy,
-	.video_render = trackerzoomer_passthrough_video_render,
-};
-
 void register_trackerzoomer_filter(void)
 {
 	obs_register_source(&trackerzoomer_filter_info);
-	obs_register_source(&trackerzoomer_passthrough_info);
 }
