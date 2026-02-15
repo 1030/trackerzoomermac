@@ -36,6 +36,11 @@ static const char *k_trackerzoomer_crop_effect_src =
 
 struct trackerzoomer_filter {
 	obs_source_t *context;
+
+	bool win_debug_crop_enable;
+	float win_debug_crop_center_x;
+	float win_debug_crop_center_y;
+	float win_debug_crop_scale;
 };
 
 static const char *trackerzoomer_filter_get_name(void *unused)
@@ -47,6 +52,13 @@ static const char *trackerzoomer_filter_get_name(void *unused)
 static void trackerzoomer_filter_defaults(obs_data_t *settings)
 {
 	obs_data_set_default_bool(settings, "enable_tracking", false);
+
+	// Windows-only debug crop controls (lets us test the shader path safely)
+	obs_data_set_default_bool(settings, "win_debug_crop_enable", false);
+	obs_data_set_default_double(settings, "win_debug_crop_center_x", 0.5);
+	obs_data_set_default_double(settings, "win_debug_crop_center_y", 0.5);
+	obs_data_set_default_double(settings, "win_debug_crop_scale", 1.0);
+
 	obs_data_set_default_int(settings, "tag_id_a", 0);
 	obs_data_set_default_int(settings, "tag_id_b", 1);
 	obs_data_set_default_double(settings, "padding", 0.0);
@@ -93,6 +105,13 @@ static obs_properties_t *trackerzoomer_filter_properties(void *data)
 
 	obs_properties_add_bool(props, "enable_tracking", "Enable AprilTag tracking");
 
+	obs_properties_t *dbg = obs_properties_create();
+	obs_properties_add_group(props, "win_debug_group", "Windows debug (shader)", OBS_GROUP_NORMAL, dbg);
+	obs_properties_add_bool(dbg, "win_debug_crop_enable", "Enable debug crop shader");
+	obs_properties_add_float_slider(dbg, "win_debug_crop_center_x", "Crop center X", 0.0, 1.0, 0.01);
+	obs_properties_add_float_slider(dbg, "win_debug_crop_center_y", "Crop center Y", 0.0, 1.0, 0.01);
+	obs_properties_add_float_slider(dbg, "win_debug_crop_scale", "Crop scale (zoom)", 1.0, 6.0, 0.05);
+
 	obs_properties_add_int(props, "tag_id_a", "Tag ID A", 0, 1, 1);
 	obs_properties_add_int(props, "tag_id_b", "Tag ID B", 0, 1, 1);
 	obs_properties_add_float(props, "padding", "Padding (px)", 0.0, 500.0, 1.0);
@@ -138,9 +157,9 @@ static obs_properties_t *trackerzoomer_filter_properties(void *data)
 
 static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *source)
 {
-	UNUSED_PARAMETER(settings);
 	struct trackerzoomer_filter *f = bzalloc(sizeof(*f));
 	f->context = source;
+	trackerzoomer_filter_update(f, settings);
 	return f;
 }
 
@@ -152,8 +171,17 @@ static void trackerzoomer_filter_destroy(void *data)
 
 static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
 {
-	UNUSED_PARAMETER(data);
-	UNUSED_PARAMETER(settings);
+	struct trackerzoomer_filter *f = data;
+	if (!f)
+		return;
+	f->win_debug_crop_enable = obs_data_get_bool(settings, "win_debug_crop_enable");
+	f->win_debug_crop_center_x = (float)obs_data_get_double(settings, "win_debug_crop_center_x");
+	f->win_debug_crop_center_y = (float)obs_data_get_double(settings, "win_debug_crop_center_y");
+	f->win_debug_crop_scale = (float)obs_data_get_double(settings, "win_debug_crop_scale");
+	if (f->win_debug_crop_scale < 1.0f)
+		f->win_debug_crop_scale = 1.0f;
+	if (f->win_debug_crop_scale > 6.0f)
+		f->win_debug_crop_scale = 6.0f;
 }
 
 static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct obs_source_frame *frame)
@@ -182,12 +210,45 @@ static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
 		return;
 	}
 
+	gs_effect_t *fx = base;
+
+	if (f->win_debug_crop_enable) {
+		if (!g_trackerzoomer_crop_effect) {
+			g_trackerzoomer_crop_effect = gs_effect_create(k_trackerzoomer_crop_effect_src, NULL, NULL);
+			if (g_trackerzoomer_crop_effect) {
+				g_param_mul = gs_effect_get_param_by_name(g_trackerzoomer_crop_effect, "mul_val");
+				g_param_add = gs_effect_get_param_by_name(g_trackerzoomer_crop_effect, "add_val");
+			}
+		}
+		if (g_trackerzoomer_crop_effect && g_param_mul && g_param_add) {
+			fx = g_trackerzoomer_crop_effect;
+
+			float cx = f->win_debug_crop_center_x;
+			float cy = f->win_debug_crop_center_y;
+			float sc = f->win_debug_crop_scale;
+			if (sc < 1.0f)
+				sc = 1.0f;
+			if (sc > 6.0f)
+				sc = 6.0f;
+			const float mul_x = 1.0f / sc;
+			const float mul_y = 1.0f / sc;
+			// add = center - mul*0.5
+			const float add_x = cx - mul_x * 0.5f;
+			const float add_y = cy - mul_y * 0.5f;
+
+			struct vec2 mul = {mul_x, mul_y};
+			struct vec2 add = {add_x, add_y};
+			gs_effect_set_vec2(g_param_mul, &mul);
+			gs_effect_set_vec2(g_param_add, &add);
+		}
+	}
+
 	if (!obs_source_process_filter_begin(f->context, GS_RGBA, 0)) {
 		obs_source_skip_video_filter(f->context);
 		return;
 	}
 
-	obs_source_process_filter_end(f->context, base, 0, 0);
+	obs_source_process_filter_end(f->context, fx, 0, 0);
 }
 
 static struct obs_source_info trackerzoomer_filter_info = {
