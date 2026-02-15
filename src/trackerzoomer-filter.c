@@ -592,7 +592,7 @@ static void *worker_main(void *param)
 		pthread_mutex_lock(&f->td_mutex);
 		zarray_t *detections = apriltag_detector_detect(f->td, &im);
 		pthread_mutex_unlock(&f->td_mutex);
-		const int det_count = zarray_size(detections);
+		UNUSED_PARAMETER(zarray_size(detections));
 		const apriltag_detection_t *da = NULL;
 		const apriltag_detection_t *db = NULL;
 		for (int i = 0; i < zarray_size(detections); i++) {
@@ -892,7 +892,7 @@ static void feed_pending_from_frame(struct trackerzoomer_filter *f, struct obs_s
 
 	// Track basic frame characteristics for logging.
 	pthread_mutex_lock(&f->frame_mutex);
-	f->_last_frame_format = (int)frame->format;
+	// (release) frame format diagnostics removed
 	f->_last_frame_w = (int)frame->width;
 	f->_last_frame_h = (int)frame->height;
 	pthread_mutex_unlock(&f->frame_mutex);
