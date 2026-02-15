@@ -50,8 +50,6 @@ struct gray_frame {
 
 struct trackerzoomer_filter {
 	obs_source_t *context;
-	obs_weak_source_t *parent_weak;
-
 	// AprilTag settings
 	bool enable_tracking;
 
@@ -82,16 +80,6 @@ struct trackerzoomer_filter {
 	float auto_roi_w;
 	float auto_roi_h;
 
-	// current desired transform (computed from ROI)
-	float target_pos_x;
-	float target_pos_y;
-	float target_scale;
-
-	// smoothed transform (actually applied)
-	float cur_pos_x;
-	float cur_pos_y;
-	float cur_scale;
-
 	// smoothed ROI (measurement smoothing, python parity)
 	bool smooth_roi_valid;
 	float smooth_roi_cx;
@@ -100,12 +88,6 @@ struct trackerzoomer_filter {
 	float smooth_roi_h;
 
 	// close-tags => force wide/full-frame
-
-	bool _transform_dirty;
-	uint64_t _last_apply_ns;
-	float _last_applied_pos_x;
-	float _last_applied_pos_y;
-	float _last_applied_scale;
 
 	// video frame counting
 	uint64_t _video_frame_seq;
@@ -141,6 +123,25 @@ struct trackerzoomer_filter {
 	apriltag_detector_t *td;
 	apriltag_family_t *tf;
 };
+
+// Platform wrapper for the worker thread event (auto-reset).
+static inline void tz_worker_event_wait(struct trackerzoomer_filter *f)
+{
+#if defined(_WIN32)
+	WaitForSingleObject(f->worker_event, INFINITE);
+#else
+	os_event_wait(f->worker_event);
+#endif
+}
+
+static inline void tz_worker_event_signal(struct trackerzoomer_filter *f)
+{
+#if defined(_WIN32)
+	SetEvent(f->worker_event);
+#else
+	os_event_signal(f->worker_event);
+#endif
+}
 
 static const char *trackerzoomer_filter_get_name(void *unused)
 {
@@ -212,24 +213,6 @@ static inline float clampf(float v, float lo, float hi)
 	if (v > hi)
 		return hi;
 	return v;
-}
-
-static void draw_solid_rect(gs_effect_t *solid, float x, float y, float w, float h)
-{
-	if (!solid)
-		return;
-	if (w <= 0.5f || h <= 0.5f)
-		return;
-
-	gs_matrix_push();
-	gs_matrix_identity();
-	gs_matrix_translate3f(x, y, 0.0f);
-
-	// NOTE: with SOLID effect, texture is ignored; we just draw a colored quad.
-	while (gs_effect_loop(solid, "Solid")) {
-		gs_draw_sprite(NULL, 0, (uint32_t)lrintf(w), (uint32_t)lrintf(h));
-	}
-	gs_matrix_pop();
 }
 
 static void downscale_luma_nearest(uint8_t *dst, int dst_w, int dst_h, int dst_stride, const uint8_t *src, int src_w,
@@ -547,7 +530,6 @@ static void update_auto_roi(struct trackerzoomer_filter *f, float minx, float mi
 	f->auto_roi_cy = ((float)y1 + (float)y2) * 0.5f;
 	f->auto_roi_w = out_w;
 	f->auto_roi_h = out_h;
-	f->_transform_dirty = true;
 }
 
 static void *worker_main(void *param)
@@ -558,11 +540,7 @@ static void *worker_main(void *param)
 #endif
 
 	while (f->worker_running) {
-#if defined(_WIN32)
-		WaitForSingleObject(f->worker_event, INFINITE);
-#else
-		os_event_wait(f->worker_event);
-#endif
+		tz_worker_event_wait(f);
 		if (!f->worker_running)
 			break;
 
@@ -676,7 +654,6 @@ static void *worker_main(void *param)
 			if (too_close) {
 				// Force full-frame by invalidating ROI.
 				f->auto_roi_valid = false;
-				f->_transform_dirty = true;
 			} else {
 				update_auto_roi(f, minx, miny, maxx, maxy, f->work.width, f->work.height, f->work.src_w,
 						f->work.src_h, true);
@@ -688,7 +665,6 @@ static void *worker_main(void *param)
 		} else if (!da && !db) {
 			pthread_mutex_lock(&f->frame_mutex);
 			f->auto_roi_valid = false;
-			f->_transform_dirty = true;
 			pthread_mutex_unlock(&f->frame_mutex);
 		}
 		// else: exactly one tag -> do nothing (hold last ROI/transform)
@@ -703,15 +679,6 @@ static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *sou
 {
 	struct trackerzoomer_filter *f = bzalloc(sizeof(*f));
 	f->context = source;
-	f->_last_applied_pos_x = 0.0f;
-	f->_last_applied_pos_y = 0.0f;
-	f->_last_applied_scale = 1.0f;
-	f->target_pos_x = 0.0f;
-	f->target_pos_y = 0.0f;
-	f->target_scale = 1.0f;
-	f->cur_pos_x = 0.0f;
-	f->cur_pos_y = 0.0f;
-	f->cur_scale = 1.0f;
 
 	f->smooth_roi_valid = false;
 	f->smooth_roi_cx = 0.0f;
@@ -762,13 +729,8 @@ static void trackerzoomer_filter_destroy(void *data)
 
 	// stop worker
 	f->worker_running = false;
-#if defined(_WIN32)
 	if (f->worker_event)
-		SetEvent(f->worker_event);
-#else
-	if (f->worker_event)
-		os_event_signal(f->worker_event);
-#endif
+		tz_worker_event_signal(f);
 	pthread_join(f->worker_thread, NULL);
 #if defined(_WIN32)
 	if (f->worker_event)
@@ -787,9 +749,6 @@ static void trackerzoomer_filter_destroy(void *data)
 		apriltag_detector_destroy(f->td);
 	if (f->tf)
 		tag16h5_destroy(f->tf);
-
-	if (f->parent_weak)
-		obs_weak_source_release(f->parent_weak);
 
 	pthread_mutex_destroy(&f->frame_mutex);
 	pthread_mutex_destroy(&f->td_mutex);
@@ -924,71 +883,43 @@ static void feed_pending_from_frame(struct trackerzoomer_filter *f, struct obs_s
 		const int ystride = (int)frame->linesize[0];
 		downscale_luma_nearest(f->pending.data, dst_w, dst_h, f->pending.stride, yplane, src_w, src_h, ystride);
 		f->pending.frame_seq = f->_video_frame_seq;
-#if defined(_WIN32)
-		SetEvent(f->worker_event);
-#else
-		os_event_signal(f->worker_event);
-#endif
+		tz_worker_event_signal(f);
 	} else if (frame->format == VIDEO_FORMAT_UYVY) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		uyvy_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
-#if defined(_WIN32)
-		SetEvent(f->worker_event);
-#else
-		os_event_signal(f->worker_event);
-#endif
+		tz_worker_event_signal(f);
 	} else if (frame->format == VIDEO_FORMAT_YUY2) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		yuy2_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
-#if defined(_WIN32)
-		SetEvent(f->worker_event);
-#else
-		os_event_signal(f->worker_event);
-#endif
+		tz_worker_event_signal(f);
 	} else if (frame->format == VIDEO_FORMAT_YVYU) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		yvyu_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
-#if defined(_WIN32)
-		SetEvent(f->worker_event);
-#else
-		os_event_signal(f->worker_event);
-#endif
+		tz_worker_event_signal(f);
 	} else if (frame->format == VIDEO_FORMAT_BGRA) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		bgra_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
-#if defined(_WIN32)
-		SetEvent(f->worker_event);
-#else
-		os_event_signal(f->worker_event);
-#endif
+		tz_worker_event_signal(f);
 	} else if (frame->format == VIDEO_FORMAT_RGBA) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		rgba_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
-#if defined(_WIN32)
-		SetEvent(f->worker_event);
-#else
-		os_event_signal(f->worker_event);
-#endif
+		tz_worker_event_signal(f);
 	} else if (frame->format == VIDEO_FORMAT_BGRX) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		bgrx_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
-#if defined(_WIN32)
-		SetEvent(f->worker_event);
-#else
-		os_event_signal(f->worker_event);
-#endif
+		tz_worker_event_signal(f);
 	} else {
 		// Unsupported format for now
 	}
