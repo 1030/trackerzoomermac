@@ -216,12 +216,21 @@ static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
 
 	if (f->win_debug_crop_enable) {
 		if (!g_trackerzoomer_crop_effect) {
-			g_trackerzoomer_crop_effect = gs_effect_create(k_trackerzoomer_crop_effect_src, NULL, NULL);
+			char *effect_path = obs_module_file("effects/trackerzoomer.effect");
+			if (effect_path) {
+				g_trackerzoomer_crop_effect = gs_effect_create_from_file(effect_path, NULL);
+				bfree(effect_path);
+			}
+			if (!g_trackerzoomer_crop_effect) {
+				g_trackerzoomer_crop_effect =
+					gs_effect_create(k_trackerzoomer_crop_effect_src, NULL, NULL);
+			}
 			if (g_trackerzoomer_crop_effect) {
 				g_param_mul = gs_effect_get_param_by_name(g_trackerzoomer_crop_effect, "mul_val");
 				g_param_add = gs_effect_get_param_by_name(g_trackerzoomer_crop_effect, "add_val");
 			}
 		}
+
 		if (g_trackerzoomer_crop_effect && g_param_mul && g_param_add) {
 			fx = g_trackerzoomer_crop_effect;
 
