@@ -5,15 +5,20 @@ AprilTag-driven axis-aligned zoom **as an OBS video filter**.
 TrackerZoom uses **two AprilTags** (family `tag16h5`, IDs `0` and `1` by default) placed on a tabletop. The filter crops and scales the source so your camera centers on the midpoint between tags and zooms so the tags sit just out of shot.
 
 - **No perspective correction** (no deskew): the crop is axis-aligned to your OBS canvas/output aspect.
-- Designed to be stable: when tracking is **off**, the filter is a simple passthrough.
+- When tracking is **off**, the filter is a simple passthrough.
+
+## Downloads
+
+- **Releases (recommended):** https://github.com/1030/trackerzoomermac/releases
+- **CI artifacts (latest builds):** https://github.com/1030/trackerzoomermac/actions
 
 ## Install
 
 ### Windows (portable OBS or standard install)
 
-Download the latest **Windows x64** build from GitHub Actions artifacts or Releases.
+Download the latest **Windows x64** build.
 
-Copy files into your OBS folder:
+Copy these files into your OBS folder:
 
 - `obs-plugins/64bit/trackerzoomer-filter.dll`
 - `data/obs-plugins/trackerzoomer-filter/effects/trackerzoomer.effect`
@@ -23,11 +28,11 @@ For **portable OBS**, those paths are relative to the portable OBS directory.
 
 ### macOS
 
-Download the `.pkg` from GitHub Actions artifacts or Releases and run it.
+Download the `.pkg` and run it.
 
 ### Linux (Ubuntu)
 
-Download the `.deb` from GitHub Actions artifacts or Releases and install it.
+Download the `.deb` and install it.
 
 ## Use
 
@@ -69,10 +74,11 @@ This repo uses CMake and vendors AprilTag in `third_party/apriltag`.
 
 CI builds for Windows/macOS/Linux via GitHub Actions.
 
+## Credits
+
+- AprilTag detector: https://github.com/AprilRobotics/apriltag
+- Inspired by TrackerZoom / TrackerZoomOBS.
+
 ## License
 
 See `LICENSE`.
-
----
-
-Inspired by the TrackerZoom/TrackerZoomOBS projects.
