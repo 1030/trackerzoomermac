@@ -1038,6 +1038,24 @@ static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
 
 	// Apply detector params (worker thread also uses td). IMPORTANT: avoid blocking the UI thread
 	// if the worker is currently inside apriltag_detector_detect().
+#if defined(_WIN32)
+	pthread_mutex_lock(&f->td_mutex);
+	if (f->td) {
+		// If we're doing our own external downscale, disable apriltag internal decimation.
+		f->td->quad_decimate = (f->downscale_mode == 0) ? 1.0f : clampf(f->quad_decimate, 1.0f, 6.0f);
+		f->td->quad_sigma = clampf(f->quad_sigma, 0.0f, 2.0f);
+		f->td->refine_edges = f->refine_edges ? 1 : 0;
+		f->td->decode_sharpening = clampf(f->decode_sharpening, 0.0f, 1.0f);
+		f->td->qtp.deglitch = f->deglitch ? 1 : 0;
+		f->td->qtp.min_cluster_pixels = f->min_cluster_pixels;
+		f->td->qtp.max_nmaxima = f->max_nmaxima;
+		f->td->qtp.critical_rad = f->critical_rad;
+		f->td->qtp.cos_critical_rad = cosf(f->critical_rad);
+		f->td->qtp.max_line_fit_mse = f->max_line_fit_mse;
+		f->td->qtp.min_white_black_diff = f->min_white_black_diff;
+	}
+	pthread_mutex_unlock(&f->td_mutex);
+#else
 	if (pthread_mutex_trylock(&f->td_mutex) == 0) {
 		if (f->td) {
 			// If we're doing our own external downscale, disable apriltag internal decimation.
@@ -1057,6 +1075,7 @@ static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
 	} else {
 		blog(LOG_DEBUG, "[trackerzoomer-filter] detector busy; skipping td param update");
 	}
+#endif
 
 	// easing tau was hardcoded; now exposed.
 
@@ -1114,43 +1133,71 @@ static void feed_pending_from_frame(struct trackerzoomer_filter *f, struct obs_s
 		const int ystride = (int)frame->linesize[0];
 		downscale_luma_nearest(f->pending.data, dst_w, dst_h, f->pending.stride, yplane, src_w, src_h, ystride);
 		f->pending.frame_seq = f->_video_frame_seq;
+#if defined(_WIN32)
+		SetEvent(f->worker_event);
+#else
 		os_event_signal(f->worker_event);
+#endif
 	} else if (frame->format == VIDEO_FORMAT_UYVY) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		uyvy_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
+#if defined(_WIN32)
+		SetEvent(f->worker_event);
+#else
 		os_event_signal(f->worker_event);
+#endif
 	} else if (frame->format == VIDEO_FORMAT_YUY2) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		yuy2_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
+#if defined(_WIN32)
+		SetEvent(f->worker_event);
+#else
 		os_event_signal(f->worker_event);
+#endif
 	} else if (frame->format == VIDEO_FORMAT_YVYU) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		yvyu_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
+#if defined(_WIN32)
+		SetEvent(f->worker_event);
+#else
 		os_event_signal(f->worker_event);
+#endif
 	} else if (frame->format == VIDEO_FORMAT_BGRA) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		bgra_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
+#if defined(_WIN32)
+		SetEvent(f->worker_event);
+#else
 		os_event_signal(f->worker_event);
+#endif
 	} else if (frame->format == VIDEO_FORMAT_RGBA) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		rgba_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
+#if defined(_WIN32)
+		SetEvent(f->worker_event);
+#else
 		os_event_signal(f->worker_event);
+#endif
 	} else if (frame->format == VIDEO_FORMAT_BGRX) {
 		const uint8_t *src = frame->data[0];
 		const int stride = (int)frame->linesize[0];
 		bgrx_to_gray_downscale(f->pending.data, dst_w, dst_h, f->pending.stride, src, src_w, src_h, stride);
 		f->pending.frame_seq = f->_video_frame_seq;
+#if defined(_WIN32)
+		SetEvent(f->worker_event);
+#else
 		os_event_signal(f->worker_event);
+#endif
 	} else {
 		// Unsupported format for now
 	}
