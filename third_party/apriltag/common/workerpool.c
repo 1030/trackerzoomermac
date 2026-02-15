@@ -28,11 +28,7 @@ either expressed or implied, of the Regents of The University of Michigan.
 
 #define _GNU_SOURCE  // Possible fix for 16.04
 #define __USE_GNU
-#if defined(_WIN32)
-#include <pthread.h>
-#else
 #include "common/pthreads_cross.h"
-#endif
 #include <assert.h>
 #include <stdbool.h>
 #include <stdio.h>
