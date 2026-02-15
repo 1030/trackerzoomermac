@@ -23,11 +23,11 @@ static const char *k_trackerzoomer_crop_effect_src =
 	"uniform texture2d image;\n"
 	"uniform float2 mul_val;\n"
 	"uniform float2 add_val;\n"
-	"sampler_state linearSampler { Filter = Linear; AddressU = Clamp; AddressV = Clamp; };\n"
-	"struct VertData { float4 pos : POSITION; float2 uv : TEXCOORD0; };\n"
-	"VertData VSDefault(VertData v_in) { VertData v_out; v_out.pos = mul(v_in.pos, ViewProj); v_out.uv = v_in.uv; return v_out; }\n"
-	"float4 PSDefault(VertData v_in) : TARGET { float2 uv = v_in.uv * mul_val + add_val; return image.Sample(linearSampler, uv); }\n"
-	"technique Draw { pass { vertex_shader = VSDefault(v_in); pixel_shader = PSDefault(v_in); } }\n";
+	"sampler_state def_sampler { Filter = Linear; AddressU = Clamp; AddressV = Clamp; };\n"
+	"struct VertInOut { float4 pos : POSITION; float2 uv : TEXCOORD0; };\n"
+	"VertInOut VSDefault(VertInOut vert_in) { VertInOut vert_out; vert_out.pos = mul(float4(vert_in.pos.xyz, 1.0), ViewProj); vert_out.uv = vert_in.uv; return vert_out; }\n"
+	"float4 PSDefault(VertInOut vert_in) : TARGET { float2 uv = vert_in.uv * mul_val + add_val; return image.Sample(def_sampler, uv); }\n"
+	"technique Draw { pass { vertex_shader = VSDefault(vert_in); pixel_shader = PSDefault(vert_in); } }\n";
 
 #if defined(_WIN32)
 // Windows ultra-minimal passthrough build.
