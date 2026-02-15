@@ -127,11 +127,6 @@ static struct obs_source_info trackerzoomer_filter_info = {
 	.video_render = trackerzoomer_filter_video_render,
 };
 
-void register_trackerzoomer_filter(void)
-{
-	obs_register_source(&trackerzoomer_filter_info);
-}
-
 #else
 
 struct gray_frame {
@@ -273,7 +268,6 @@ struct trackerzoomer_filter {
 	apriltag_detector_t *td;
 	apriltag_family_t *tf;
 };
-#endif
 
 static const char *trackerzoomer_filter_get_name(void *unused)
 {
@@ -957,7 +951,6 @@ static void trackerzoomer_filter_destroy(void *data)
 
 	bfree(f);
 }
-#endif
 
 static obs_properties_t *trackerzoomer_filter_properties(void *data)
 {
@@ -1013,7 +1006,6 @@ static obs_properties_t *trackerzoomer_filter_properties(void *data)
 	return props;
 }
 
-#if !defined(_WIN32)
 static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
 {
 	struct trackerzoomer_filter *f = data;
@@ -1337,9 +1329,6 @@ static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct ob
 			f->_video_frame_seq++;
 			feed_pending_from_frame(f, frame);
 		}
-#else
-		// Disabled on Windows for stabilization.
-#endif
 	}
 
 	return frame;
@@ -1407,6 +1396,8 @@ static struct obs_source_info trackerzoomer_filter_info = {
 	.filter_video = trackerzoomer_filter_video,
 	.video_render = trackerzoomer_filter_video_render,
 };
+
+#endif // defined(_WIN32)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Minimal passthrough filter for isolating render pipeline issues.
