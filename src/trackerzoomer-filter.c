@@ -29,6 +29,111 @@ static const char *k_trackerzoomer_crop_effect_src =
 	"float4 PSDefault(VertData v_in) : TARGET { float2 uv = v_in.uv * mul_val + add_val; return image.Sample(linearSampler, uv); }\n"
 	"technique Draw { pass { vertex_shader = VSDefault(v_in); pixel_shader = PSDefault(v_in); } }\n";
 
+#if defined(_WIN32)
+// Windows ultra-minimal passthrough build.
+// Goal: allow OBS to load scene collections referencing this filter without
+// crashing, while we debug heap corruption in the full implementation.
+
+struct trackerzoomer_filter {
+	obs_source_t *context;
+};
+
+static const char *trackerzoomer_filter_get_name(void *unused)
+{
+	UNUSED_PARAMETER(unused);
+	return "TrackerZoom Filter";
+}
+
+static void trackerzoomer_filter_defaults(obs_data_t *settings)
+{
+	// Keep settings stable for existing configs.
+	obs_data_set_default_bool(settings, "enable_tracking", false);
+}
+
+static obs_properties_t *trackerzoomer_filter_properties(void *data)
+{
+	UNUSED_PARAMETER(data);
+	obs_properties_t *props = obs_properties_create();
+	obs_properties_add_bool(props, "enable_tracking", "Enable AprilTag tracking");
+	return props;
+}
+
+static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *source)
+{
+	UNUSED_PARAMETER(settings);
+	struct trackerzoomer_filter *f = bzalloc(sizeof(*f));
+	f->context = source;
+	return f;
+}
+
+static void trackerzoomer_filter_destroy(void *data)
+{
+	struct trackerzoomer_filter *f = data;
+	bfree(f);
+}
+
+static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
+{
+	UNUSED_PARAMETER(data);
+	UNUSED_PARAMETER(settings);
+}
+
+static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct obs_source_frame *frame)
+{
+	UNUSED_PARAMETER(data);
+	return frame;
+}
+
+static void trackerzoomer_filter_tick(void *data, float seconds)
+{
+	UNUSED_PARAMETER(data);
+	UNUSED_PARAMETER(seconds);
+}
+
+static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
+{
+	UNUSED_PARAMETER(effect);
+	struct trackerzoomer_filter *f = data;
+	if (!f) {
+		return;
+	}
+
+	gs_effect_t *base = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+	if (!base) {
+		obs_source_skip_video_filter(f->context);
+		return;
+	}
+
+	if (!obs_source_process_filter_begin(f->context, GS_RGBA, 0)) {
+		obs_source_skip_video_filter(f->context);
+		return;
+	}
+
+	obs_source_process_filter_end(f->context, base, 0, 0);
+}
+
+static struct obs_source_info trackerzoomer_filter_info = {
+	.id = "trackerzoomer_filter",
+	.type = OBS_SOURCE_TYPE_FILTER,
+	.output_flags = OBS_SOURCE_VIDEO,
+	.get_name = trackerzoomer_filter_get_name,
+	.get_defaults = trackerzoomer_filter_defaults,
+	.create = trackerzoomer_filter_create,
+	.destroy = trackerzoomer_filter_destroy,
+	.get_properties = trackerzoomer_filter_properties,
+	.update = trackerzoomer_filter_update,
+	.video_tick = trackerzoomer_filter_tick,
+	.filter_video = trackerzoomer_filter_video,
+	.video_render = trackerzoomer_filter_video_render,
+};
+
+void register_trackerzoomer_filter(void)
+{
+	obs_register_source(&trackerzoomer_filter_info);
+}
+
+#else
+
 struct gray_frame {
 	uint8_t *data;
 	int width;  // detection buffer width
@@ -39,11 +144,6 @@ struct gray_frame {
 	uint64_t frame_seq;
 };
 
-#if defined(_WIN32)
-struct trackerzoomer_filter {
-	obs_source_t *context;
-};
-#else
 struct trackerzoomer_filter {
 	obs_source_t *context;
 	obs_weak_source_t *parent_weak;
@@ -770,66 +870,6 @@ static void *worker_main(void *param)
 	return NULL;
 }
 
-#if defined(_WIN32)
-// Windows emergency-safe implementation:
-// Provide a minimal passthrough filter under the SAME id (trackerzoomer_filter)
-// so scene collections can load without crashing while we debug the real impl.
-
-static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *source)
-{
-	UNUSED_PARAMETER(settings);
-	struct trackerzoomer_filter *f = bzalloc(sizeof(*f));
-	f->context = source;
-	return f;
-}
-
-static void trackerzoomer_filter_destroy(void *data)
-{
-	struct trackerzoomer_filter *f = data;
-	bfree(f);
-}
-
-static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
-{
-	UNUSED_PARAMETER(data);
-	UNUSED_PARAMETER(settings);
-}
-
-static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct obs_source_frame *frame)
-{
-	UNUSED_PARAMETER(data);
-	return frame;
-}
-
-static void trackerzoomer_filter_tick(void *data, float seconds)
-{
-	UNUSED_PARAMETER(data);
-	UNUSED_PARAMETER(seconds);
-}
-
-static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
-{
-	UNUSED_PARAMETER(effect);
-	struct trackerzoomer_filter *f = data;
-	if (!f) {
-		return;
-	}
-
-	gs_effect_t *base = obs_get_base_effect(OBS_EFFECT_DEFAULT);
-	if (!base) {
-		obs_source_skip_video_filter(f->context);
-		return;
-	}
-
-	if (!obs_source_process_filter_begin(f->context, GS_RGBA, 0)) {
-		obs_source_skip_video_filter(f->context);
-		return;
-	}
-
-	obs_source_process_filter_end(f->context, base, 0, 0);
-}
-
-#else
 static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *source)
 {
 	struct trackerzoomer_filter *f = bzalloc(sizeof(*f));
