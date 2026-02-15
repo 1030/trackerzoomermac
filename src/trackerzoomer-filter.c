@@ -29,294 +29,6 @@ static const char *k_trackerzoomer_crop_effect_src =
 	"float4 PSDefault(VertInOut vert_in) : TARGET { float2 uv = vert_in.uv * mul_val + add_val; return image.Sample(def_sampler, uv); }\n"
 	"technique Draw { pass { vertex_shader = VSDefault(vert_in); pixel_shader = PSDefault(vert_in); } }\n";
 
-#if defined(_WIN32)
-// Windows ultra-minimal passthrough build.
-// Goal: allow OBS to load scene collections referencing this filter without
-// crashing, while we debug heap corruption in the full implementation.
-
-struct trackerzoomer_filter {
-	obs_source_t *context;
-
-	bool win_debug_crop_enable;
-	float win_debug_crop_center_x;
-	float win_debug_crop_center_y;
-	float win_debug_crop_scale;
-
-	bool manual_roi_enable;
-	float manual_roi_center_x;
-	float manual_roi_center_y;
-	float manual_roi_width;
-	float manual_roi_height;
-};
-
-static const char *trackerzoomer_filter_get_name(void *unused)
-{
-	UNUSED_PARAMETER(unused);
-	return "TrackerZoom Filter";
-}
-
-static void trackerzoomer_filter_defaults(obs_data_t *settings)
-{
-	obs_data_set_default_bool(settings, "enable_tracking", false);
-
-	// Windows-only debug crop controls (lets us test the shader path safely)
-	obs_data_set_default_bool(settings, "win_debug_crop_enable", false);
-	obs_data_set_default_double(settings, "win_debug_crop_center_x", 0.5);
-	obs_data_set_default_double(settings, "win_debug_crop_center_y", 0.5);
-	obs_data_set_default_double(settings, "win_debug_crop_scale", 1.0);
-
-	obs_data_set_default_int(settings, "tag_id_a", 0);
-	obs_data_set_default_int(settings, "tag_id_b", 1);
-	obs_data_set_default_double(settings, "padding", 0.0);
-	obs_data_set_default_double(settings, "min_decision_margin", 20.0);
-	obs_data_set_default_int(settings, "max_hamming", 0);
-
-	obs_data_set_default_int(settings, "downscale_mode", 0); // 0 external, 1 apriltag quad_decimate
-	obs_data_set_default_int(settings, "detect_width", 960);
-
-	// Apriltag tuning defaults (conservative)
-	obs_data_set_default_double(settings, "quad_decimate", 1.0);
-	obs_data_set_default_double(settings, "quad_sigma", 0.0);
-	obs_data_set_default_bool(settings, "refine_edges", true);
-	obs_data_set_default_double(settings, "decode_sharpening", 0.25);
-	obs_data_set_default_bool(settings, "deglitch", false);
-	obs_data_set_default_int(settings, "min_cluster_pixels", 5);
-	obs_data_set_default_int(settings, "max_nmaxima", 10);
-	obs_data_set_default_double(settings, "critical_rad", 0.0);
-	obs_data_set_default_double(settings, "max_line_fit_mse", 10.0);
-	obs_data_set_default_int(settings, "min_white_black_diff", 5);
-
-	obs_data_set_default_double(settings, "detect_fps", 30.0);
-
-	// Transform debugging / stabilization
-	obs_data_set_default_bool(settings, "freeze_transform", false);
-	obs_data_set_default_bool(settings, "apply_translation", true);
-	obs_data_set_default_bool(settings, "apply_scale", true);
-	obs_data_set_default_double(settings, "meas_alpha", 0.2);
-	obs_data_set_default_double(settings, "ease_tau", 0.5);
-	obs_data_set_default_bool(settings, "jump_guard", false);
-	obs_data_set_default_double(settings, "max_pos_jump_px", 150.0);
-	obs_data_set_default_double(settings, "max_scale_jump", 0.5);
-
-	// When enabled, clamps the scene-item translation so the scaled source still
-	// covers the canvas (no black bars revealed behind it).
-	obs_data_set_default_bool(settings, "clamp_to_canvas", true);
-	obs_data_set_default_double(settings, "clamp_margin_px", 0.0);
-}
-
-static obs_properties_t *trackerzoomer_filter_properties(void *data)
-{
-	UNUSED_PARAMETER(data);
-	obs_properties_t *props = obs_properties_create();
-
-	obs_properties_add_bool(props, "enable_tracking", "Enable AprilTag tracking");
-
-	obs_properties_t *mroi = obs_properties_create();
-	obs_properties_add_group(props, "manual_roi_group", "Manual ROI (Windows)", OBS_GROUP_NORMAL, mroi);
-	obs_properties_add_bool(mroi, "manual_roi_enable", "Enable manual ROI");
-	obs_properties_add_float_slider(mroi, "manual_roi_center_x", "Center X", 0.0, 1.0, 0.01);
-	obs_properties_add_float_slider(mroi, "manual_roi_center_y", "Center Y", 0.0, 1.0, 0.01);
-	obs_properties_add_float_slider(mroi, "manual_roi_width", "Width (fraction)", 0.05, 1.0, 0.01);
-	obs_properties_add_float_slider(mroi, "manual_roi_height", "Height (fraction)", 0.05, 1.0, 0.01);
-
-	obs_properties_t *dbg = obs_properties_create();
-	obs_properties_add_group(props, "win_debug_group", "Windows debug (shader)", OBS_GROUP_NORMAL, dbg);
-	obs_properties_add_bool(dbg, "win_debug_crop_enable", "Enable debug crop shader");
-	obs_properties_add_float_slider(dbg, "win_debug_crop_center_x", "Crop center X", 0.0, 1.0, 0.01);
-	obs_properties_add_float_slider(dbg, "win_debug_crop_center_y", "Crop center Y", 0.0, 1.0, 0.01);
-	obs_properties_add_float_slider(dbg, "win_debug_crop_scale", "Crop scale (zoom)", 1.0, 6.0, 0.05);
-
-	obs_properties_add_int(props, "tag_id_a", "Tag ID A", 0, 1, 1);
-	obs_properties_add_int(props, "tag_id_b", "Tag ID B", 0, 1, 1);
-	obs_properties_add_float(props, "padding", "Padding (px)", 0.0, 500.0, 1.0);
-	obs_properties_add_float_slider(props, "min_decision_margin", "Min decision margin", 0.0, 100.0, 1.0);
-	obs_properties_add_int_slider(props, "max_hamming", "Max hamming", 0, 2, 1);
-
-	// Detection scaling mode (diagnostic)
-	obs_property_t *p_mode = obs_properties_add_list(props, "downscale_mode", "Detection scaling mode",
-							 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-	obs_property_list_add_int(p_mode, "External downscale (detect_width)", 0);
-	obs_property_list_add_int(p_mode, "Apriltag quad_decimate (feed full-res)", 1);
-	obs_properties_add_int_slider(props, "detect_width", "External detect width (px)", 160, 3840, 16);
-
-	// Apriltag detector tuning
-	obs_properties_add_float_slider(props, "quad_decimate", "quad_decimate", 1.0, 6.0, 0.1);
-	obs_properties_add_float_slider(props, "quad_sigma", "quad_sigma", 0.0, 2.0, 0.05);
-	obs_properties_add_bool(props, "refine_edges", "refine_edges");
-	obs_properties_add_float_slider(props, "decode_sharpening", "decode_sharpening", 0.0, 1.0, 0.05);
-	obs_properties_add_bool(props, "deglitch", "qtp.deglitch");
-	obs_properties_add_int_slider(props, "min_cluster_pixels", "qtp.min_cluster_pixels", 0, 1000, 1);
-	obs_properties_add_int_slider(props, "max_nmaxima", "qtp.max_nmaxima", 1, 100, 1);
-	obs_properties_add_float_slider(props, "critical_rad", "qtp.critical_rad (rad)", 0.0, 3.14159, 0.01);
-	obs_properties_add_float_slider(props, "max_line_fit_mse", "qtp.max_line_fit_mse", 0.0, 100.0, 0.5);
-	obs_properties_add_int_slider(props, "min_white_black_diff", "qtp.min_white_black_diff", 0, 255, 1);
-
-	obs_properties_add_float_slider(props, "detect_fps", "Detection FPS", 1.0, 60.0, 1.0);
-
-	// Transform debugging / stabilization
-	obs_properties_add_bool(props, "freeze_transform", "Freeze transform (still detect, don't apply)");
-	obs_properties_add_bool(props, "apply_translation", "Apply translation");
-	obs_properties_add_bool(props, "apply_scale", "Apply scale");
-	obs_properties_add_float_slider(props, "meas_alpha", "ROI measurement smoothing (alpha)", 0.0, 1.0, 0.01);
-	obs_properties_add_float_slider(props, "ease_tau", "Transform easing tau (s)", 0.01, 2.0, 0.01);
-	obs_properties_add_bool(props, "jump_guard", "Jump guard (clamp per-step changes)");
-	obs_properties_add_float_slider(props, "max_pos_jump_px", "Max pos jump per step (px)", 0.0, 2000.0, 5.0);
-	obs_properties_add_float_slider(props, "max_scale_jump", "Max scale jump per step", 0.0, 5.0, 0.01);
-
-	obs_properties_add_bool(props, "clamp_to_canvas", "Clamp to canvas (avoid black borders)");
-	obs_properties_add_float_slider(props, "clamp_margin_px", "Clamp margin (px)", 0.0, 200.0, 1.0);
-
-	return props;
-}
-
-static void trackerzoomer_filter_update(void *data, obs_data_t *settings);
-
-static void *trackerzoomer_filter_create(obs_data_t *settings, obs_source_t *source)
-{
-	struct trackerzoomer_filter *f = bzalloc(sizeof(*f));
-	f->context = source;
-	trackerzoomer_filter_update(f, settings);
-	return f;
-}
-
-static void trackerzoomer_filter_destroy(void *data)
-{
-	struct trackerzoomer_filter *f = data;
-	bfree(f);
-}
-
-static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
-{
-	struct trackerzoomer_filter *f = data;
-	if (!f)
-		return;
-	f->win_debug_crop_enable = obs_data_get_bool(settings, "win_debug_crop_enable");
-	f->win_debug_crop_center_x = (float)obs_data_get_double(settings, "win_debug_crop_center_x");
-	f->win_debug_crop_center_y = (float)obs_data_get_double(settings, "win_debug_crop_center_y");
-	f->win_debug_crop_scale = (float)obs_data_get_double(settings, "win_debug_crop_scale");
-	f->manual_roi_enable = obs_data_get_bool(settings, "manual_roi_enable");
-	f->manual_roi_center_x = (float)obs_data_get_double(settings, "manual_roi_center_x");
-	f->manual_roi_center_y = (float)obs_data_get_double(settings, "manual_roi_center_y");
-	f->manual_roi_width = (float)obs_data_get_double(settings, "manual_roi_width");
-	f->manual_roi_height = (float)obs_data_get_double(settings, "manual_roi_height");
-	if (f->win_debug_crop_scale < 1.0f)
-		f->win_debug_crop_scale = 1.0f;
-	if (f->win_debug_crop_scale > 6.0f)
-		f->win_debug_crop_scale = 6.0f;
-}
-
-static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct obs_source_frame *frame)
-{
-	UNUSED_PARAMETER(data);
-	return frame;
-}
-
-static void trackerzoomer_filter_tick(void *data, float seconds)
-{
-	UNUSED_PARAMETER(data);
-	UNUSED_PARAMETER(seconds);
-}
-
-static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
-{
-	UNUSED_PARAMETER(effect);
-	struct trackerzoomer_filter *f = data;
-	if (!f) {
-		return;
-	}
-
-	gs_effect_t *base = obs_get_base_effect(OBS_EFFECT_DEFAULT);
-	if (!base) {
-		obs_source_skip_video_filter(f->context);
-		return;
-	}
-
-	gs_effect_t *fx = base;
-
-	if (f->win_debug_crop_enable || f->manual_roi_enable) {
-		if (!g_trackerzoomer_crop_effect) {
-			char *effect_path = obs_module_file("effects/trackerzoomer.effect");
-			if (effect_path) {
-				g_trackerzoomer_crop_effect = gs_effect_create_from_file(effect_path, NULL);
-				bfree(effect_path);
-			}
-			if (!g_trackerzoomer_crop_effect) {
-				g_trackerzoomer_crop_effect =
-					gs_effect_create(k_trackerzoomer_crop_effect_src, NULL, NULL);
-			}
-			if (g_trackerzoomer_crop_effect) {
-				g_param_mul = gs_effect_get_param_by_name(g_trackerzoomer_crop_effect, "mul_val");
-				g_param_add = gs_effect_get_param_by_name(g_trackerzoomer_crop_effect, "add_val");
-			}
-		}
-
-		if (g_trackerzoomer_crop_effect && g_param_mul && g_param_add) {
-			fx = g_trackerzoomer_crop_effect;
-
-			float mul_x = 1.0f, mul_y = 1.0f, add_x = 0.0f, add_y = 0.0f;
-			if (f->manual_roi_enable) {
-				float cx = f->manual_roi_center_x;
-				float cy = f->manual_roi_center_y;
-				float w = f->manual_roi_width;
-				float h = f->manual_roi_height;
-				if (w < 0.05f)
-					w = 0.05f;
-				if (h < 0.05f)
-					h = 0.05f;
-				if (w > 1.0f)
-					w = 1.0f;
-				if (h > 1.0f)
-					h = 1.0f;
-				mul_x = w;
-				mul_y = h;
-				add_x = cx - mul_x * 0.5f;
-				add_y = cy - mul_y * 0.5f;
-			} else {
-				float cx = f->win_debug_crop_center_x;
-				float cy = f->win_debug_crop_center_y;
-				float sc = f->win_debug_crop_scale;
-				if (sc < 1.0f)
-					sc = 1.0f;
-				if (sc > 6.0f)
-					sc = 6.0f;
-				mul_x = 1.0f / sc;
-				mul_y = 1.0f / sc;
-				add_x = cx - mul_x * 0.5f;
-				add_y = cy - mul_y * 0.5f;
-			}
-
-			struct vec2 mul = {mul_x, mul_y};
-			struct vec2 add = {add_x, add_y};
-			gs_effect_set_vec2(g_param_mul, &mul);
-			gs_effect_set_vec2(g_param_add, &add);
-		}
-	}
-
-	if (!obs_source_process_filter_begin(f->context, GS_RGBA, 0)) {
-		obs_source_skip_video_filter(f->context);
-		return;
-	}
-
-	obs_source_process_filter_end(f->context, fx, 0, 0);
-}
-
-static struct obs_source_info trackerzoomer_filter_info = {
-	.id = "trackerzoomer_filter",
-	.type = OBS_SOURCE_TYPE_FILTER,
-	.output_flags = OBS_SOURCE_VIDEO,
-	.get_name = trackerzoomer_filter_get_name,
-	.get_defaults = trackerzoomer_filter_defaults,
-	.create = trackerzoomer_filter_create,
-	.destroy = trackerzoomer_filter_destroy,
-	.get_properties = trackerzoomer_filter_properties,
-	.update = trackerzoomer_filter_update,
-	.video_tick = trackerzoomer_filter_tick,
-	.filter_video = trackerzoomer_filter_video,
-	.video_render = trackerzoomer_filter_video_render,
-};
-
-#else
-
 struct gray_frame {
 	uint8_t *data;
 	int width;  // detection buffer width
@@ -333,6 +45,14 @@ struct trackerzoomer_filter {
 
 	// AprilTag settings
 	bool enable_tracking;
+
+	// Manual ROI override (fractional UV-style controls)
+	bool manual_roi_enable;
+	float manual_roi_center_x;
+	float manual_roi_center_y;
+	float manual_roi_width;
+	float manual_roi_height;
+
 	int tag_id_a;
 	int tag_id_b;
 	float padding;
@@ -466,6 +186,12 @@ static const char *trackerzoomer_filter_get_name(void *unused)
 static void trackerzoomer_filter_defaults(obs_data_t *settings)
 {
 	obs_data_set_default_bool(settings, "enable_tracking", false);
+	obs_data_set_default_bool(settings, "manual_roi_enable", false);
+	obs_data_set_default_double(settings, "manual_roi_center_x", 0.5);
+	obs_data_set_default_double(settings, "manual_roi_center_y", 0.5);
+	obs_data_set_default_double(settings, "manual_roi_width", 1.0);
+	obs_data_set_default_double(settings, "manual_roi_height", 1.0);
+
 	obs_data_set_default_int(settings, "tag_id_a", 0);
 	obs_data_set_default_int(settings, "tag_id_b", 1);
 	obs_data_set_default_double(settings, "padding", 0.0);
@@ -1147,6 +873,14 @@ static obs_properties_t *trackerzoomer_filter_properties(void *data)
 
 	obs_properties_add_bool(props, "enable_tracking", "Enable AprilTag tracking");
 
+	obs_properties_t *mroi = obs_properties_create();
+	obs_properties_add_group(props, "manual_roi_group", "Manual ROI", OBS_GROUP_NORMAL, mroi);
+	obs_properties_add_bool(mroi, "manual_roi_enable", "Enable manual ROI override");
+	obs_properties_add_float_slider(mroi, "manual_roi_center_x", "Center X", 0.0, 1.0, 0.01);
+	obs_properties_add_float_slider(mroi, "manual_roi_center_y", "Center Y", 0.0, 1.0, 0.01);
+	obs_properties_add_float_slider(mroi, "manual_roi_width", "Width (fraction)", 0.05, 1.0, 0.01);
+	obs_properties_add_float_slider(mroi, "manual_roi_height", "Height (fraction)", 0.05, 1.0, 0.01);
+
 	obs_properties_add_int(props, "tag_id_a", "Tag ID A", 0, 1, 1);
 	obs_properties_add_int(props, "tag_id_b", "Tag ID B", 0, 1, 1);
 	obs_properties_add_float(props, "padding", "Padding (px)", 0.0, 500.0, 1.0);
@@ -1202,6 +936,11 @@ static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
 
 	const bool prev_enable = f->enable_tracking;
 	f->enable_tracking = obs_data_get_bool(settings, "enable_tracking");
+	f->manual_roi_enable = obs_data_get_bool(settings, "manual_roi_enable");
+	f->manual_roi_center_x = (float)obs_data_get_double(settings, "manual_roi_center_x");
+	f->manual_roi_center_y = (float)obs_data_get_double(settings, "manual_roi_center_y");
+	f->manual_roi_width = (float)obs_data_get_double(settings, "manual_roi_width");
+	f->manual_roi_height = (float)obs_data_get_double(settings, "manual_roi_height");
 	// Avoid deadlocking with OBS settings save: pause UI transform tasks briefly on any update.
 	// In particular, enable/disable tracking triggers an immediate save.
 	const uint64_t now_ns = os_gettime_ns();
@@ -1406,6 +1145,33 @@ static void trackerzoomer_filter_tick(void *data, float seconds)
 	if (!f)
 		return;
 
+	// Manual ROI override: always takes precedence.
+	if (f->manual_roi_enable) {
+		float cx = f->manual_roi_center_x;
+		float cy = f->manual_roi_center_y;
+		float w = f->manual_roi_width;
+		float h = f->manual_roi_height;
+		if (w < 0.05f)
+			w = 0.05f;
+		if (h < 0.05f)
+			h = 0.05f;
+		if (w > 1.0f)
+			w = 1.0f;
+		if (h > 1.0f)
+			h = 1.0f;
+		const float mul_x = w;
+		const float mul_y = h;
+		const float add_x = cx - mul_x * 0.5f;
+		const float add_y = cy - mul_y * 0.5f;
+		pthread_mutex_lock(&f->xform_mutex);
+		f->render_mul_x = mul_x;
+		f->render_mul_y = mul_y;
+		f->render_add_x = add_x;
+		f->render_add_y = add_y;
+		pthread_mutex_unlock(&f->xform_mutex);
+		return;
+	}
+
 	// When tracking is off, render full frame.
 	if (!f->enable_tracking) {
 		pthread_mutex_lock(&f->xform_mutex);
@@ -1507,7 +1273,6 @@ static struct obs_source_frame *trackerzoomer_filter_video(void *data, struct ob
 	// This avoids polling the parent source, which can degrade macOS webcam feed
 	// quality (stutter/glitches) due to internal locking/conversion.
 	if (f->enable_tracking) {
-#if !defined(_WIN32)
 		const uint64_t now = os_gettime_ns();
 		const float fps = (f->detect_fps > 0.1f) ? f->detect_fps : 30.0f;
 		const uint64_t interval = (uint64_t)(1000000000.0 / (double)fps);
@@ -1567,7 +1332,6 @@ static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
 
 	obs_source_process_filter_end(f->context, fx, 0, 0);
 }
-#endif
 
 static struct obs_source_info trackerzoomer_filter_info = {
 	.id = "trackerzoomer_filter",
@@ -1584,8 +1348,6 @@ static struct obs_source_info trackerzoomer_filter_info = {
 	.filter_video = trackerzoomer_filter_video,
 	.video_render = trackerzoomer_filter_video_render,
 };
-
-#endif // defined(_WIN32)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Minimal passthrough filter for isolating render pipeline issues.
