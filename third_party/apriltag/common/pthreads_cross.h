@@ -24,22 +24,8 @@ SOFTWARE.
 #define __CPTHREAD_H__
 
 #ifdef _WIN32
-/*
- * OBS's Windows build environment typically provides a pthreads implementation
- * (e.g. pthreads-win32) via its deps. If <pthread.h> is available, prefer that
- * and do not redefine pthread types (avoids typedef conflicts).
- */
-#if defined(__has_include)
-#  if __has_include(<pthread.h>)
-#    include <pthread.h>
-#    define APRILTAG_PTHREADS_EXTERNAL 1
-#  endif
-#endif
-
-#ifndef APRILTAG_PTHREADS_EXTERNAL
 #include <stdbool.h>
 #include <windows.h>
-#endif
 #else
 #include <pthread.h>
 #include <sched.h>
@@ -47,8 +33,6 @@ SOFTWARE.
 #include <time.h>
 
 #ifdef _WIN32
-
-#ifndef APRILTAG_PTHREADS_EXTERNAL
 
 typedef CRITICAL_SECTION pthread_mutex_t;
 typedef void pthread_mutexattr_t;
@@ -81,8 +65,6 @@ int sched_yield(void);
 #ifdef __cplusplus
 }
 #endif
-#endif /* !APRILTAG_PTHREADS_EXTERNAL */
-
 #endif /* _WIN32 */
 
 #ifdef __cplusplus
