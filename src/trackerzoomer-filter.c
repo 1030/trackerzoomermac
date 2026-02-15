@@ -1,7 +1,16 @@
 #include <obs-module.h>
 #include <graphics/graphics.h>
 #include <util/platform.h>
+
+#if !defined(_WIN32)
 #include <util/threading.h>
+#else
+// On Windows we use apriltag's Win32 pthread shim (pthreads_cross).
+#include "common/pthreads_cross.h"
+#ifndef pthread_mutex_init_value
+#define pthread_mutex_init_value(m) pthread_mutex_init((m), NULL)
+#endif
+#endif
 
 #if defined(HAVE_OBS_FRONTEND_API)
 #include <obs/obs-frontend-api.h>
