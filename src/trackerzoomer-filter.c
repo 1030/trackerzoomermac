@@ -41,6 +41,12 @@ struct trackerzoomer_filter {
 	float win_debug_crop_center_x;
 	float win_debug_crop_center_y;
 	float win_debug_crop_scale;
+
+	bool manual_roi_enable;
+	float manual_roi_center_x;
+	float manual_roi_center_y;
+	float manual_roi_width;
+	float manual_roi_height;
 };
 
 static const char *trackerzoomer_filter_get_name(void *unused)
@@ -104,6 +110,14 @@ static obs_properties_t *trackerzoomer_filter_properties(void *data)
 	obs_properties_t *props = obs_properties_create();
 
 	obs_properties_add_bool(props, "enable_tracking", "Enable AprilTag tracking");
+
+	obs_properties_t *mroi = obs_properties_create();
+	obs_properties_add_group(props, "manual_roi_group", "Manual ROI (Windows)", OBS_GROUP_NORMAL, mroi);
+	obs_properties_add_bool(mroi, "manual_roi_enable", "Enable manual ROI");
+	obs_properties_add_float_slider(mroi, "manual_roi_center_x", "Center X", 0.0, 1.0, 0.01);
+	obs_properties_add_float_slider(mroi, "manual_roi_center_y", "Center Y", 0.0, 1.0, 0.01);
+	obs_properties_add_float_slider(mroi, "manual_roi_width", "Width (fraction)", 0.05, 1.0, 0.01);
+	obs_properties_add_float_slider(mroi, "manual_roi_height", "Height (fraction)", 0.05, 1.0, 0.01);
 
 	obs_properties_t *dbg = obs_properties_create();
 	obs_properties_add_group(props, "win_debug_group", "Windows debug (shader)", OBS_GROUP_NORMAL, dbg);
@@ -180,6 +194,11 @@ static void trackerzoomer_filter_update(void *data, obs_data_t *settings)
 	f->win_debug_crop_center_x = (float)obs_data_get_double(settings, "win_debug_crop_center_x");
 	f->win_debug_crop_center_y = (float)obs_data_get_double(settings, "win_debug_crop_center_y");
 	f->win_debug_crop_scale = (float)obs_data_get_double(settings, "win_debug_crop_scale");
+	f->manual_roi_enable = obs_data_get_bool(settings, "manual_roi_enable");
+	f->manual_roi_center_x = (float)obs_data_get_double(settings, "manual_roi_center_x");
+	f->manual_roi_center_y = (float)obs_data_get_double(settings, "manual_roi_center_y");
+	f->manual_roi_width = (float)obs_data_get_double(settings, "manual_roi_width");
+	f->manual_roi_height = (float)obs_data_get_double(settings, "manual_roi_height");
 	if (f->win_debug_crop_scale < 1.0f)
 		f->win_debug_crop_scale = 1.0f;
 	if (f->win_debug_crop_scale > 6.0f)
@@ -214,7 +233,7 @@ static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
 
 	gs_effect_t *fx = base;
 
-	if (f->win_debug_crop_enable) {
+	if (f->win_debug_crop_enable || f->manual_roi_enable) {
 		if (!g_trackerzoomer_crop_effect) {
 			char *effect_path = obs_module_file("effects/trackerzoomer.effect");
 			if (effect_path) {
@@ -234,18 +253,37 @@ static void trackerzoomer_filter_video_render(void *data, gs_effect_t *effect)
 		if (g_trackerzoomer_crop_effect && g_param_mul && g_param_add) {
 			fx = g_trackerzoomer_crop_effect;
 
-			float cx = f->win_debug_crop_center_x;
-			float cy = f->win_debug_crop_center_y;
-			float sc = f->win_debug_crop_scale;
-			if (sc < 1.0f)
-				sc = 1.0f;
-			if (sc > 6.0f)
-				sc = 6.0f;
-			const float mul_x = 1.0f / sc;
-			const float mul_y = 1.0f / sc;
-			// add = center - mul*0.5
-			const float add_x = cx - mul_x * 0.5f;
-			const float add_y = cy - mul_y * 0.5f;
+			float mul_x = 1.0f, mul_y = 1.0f, add_x = 0.0f, add_y = 0.0f;
+			if (f->manual_roi_enable) {
+				float cx = f->manual_roi_center_x;
+				float cy = f->manual_roi_center_y;
+				float w = f->manual_roi_width;
+				float h = f->manual_roi_height;
+				if (w < 0.05f)
+					w = 0.05f;
+				if (h < 0.05f)
+					h = 0.05f;
+				if (w > 1.0f)
+					w = 1.0f;
+				if (h > 1.0f)
+					h = 1.0f;
+				mul_x = w;
+				mul_y = h;
+				add_x = cx - mul_x * 0.5f;
+				add_y = cy - mul_y * 0.5f;
+			} else {
+				float cx = f->win_debug_crop_center_x;
+				float cy = f->win_debug_crop_center_y;
+				float sc = f->win_debug_crop_scale;
+				if (sc < 1.0f)
+					sc = 1.0f;
+				if (sc > 6.0f)
+					sc = 6.0f;
+				mul_x = 1.0f / sc;
+				mul_y = 1.0f / sc;
+				add_x = cx - mul_x * 0.5f;
+				add_y = cy - mul_y * 0.5f;
+			}
 
 			struct vec2 mul = {mul_x, mul_y};
 			struct vec2 add = {add_x, add_y};
