@@ -35,7 +35,9 @@ add_library(
   "${APRILTAG_DIR}/common/image_u8x3.c"
   "${APRILTAG_DIR}/common/image_u8x4.c"
   "${APRILTAG_DIR}/common/matd.c"
-  "${APRILTAG_DIR}/common/pthreads_cross.c"
+  # pthreads_cross provides a Win32 pthread shim. OBS already ships pthreads on Windows,
+  # and compiling both can cause pthread_t/pthread_mutex_t conflicts.
+  $<$<NOT:$<PLATFORM_ID:Windows>>:"${APRILTAG_DIR}/common/pthreads_cross.c">
   "${APRILTAG_DIR}/common/pnm.c"
   "${APRILTAG_DIR}/common/svd22.c"
   "${APRILTAG_DIR}/common/time_util.c"
